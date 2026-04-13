@@ -1,0 +1,4 @@
+backup/forward_model.pth filter=lfs diff=lfs merge=lfs -text
+dataset/dynamics_dataset_trajectorys.npy filter=lfs diff=lfs merge=lfs -text
+*.pth filter=lfs diff=lfs merge=lfs -text
+*.npy filter=lfs diff=lfs merge=lfs -text
