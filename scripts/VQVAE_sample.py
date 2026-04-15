@@ -4,9 +4,9 @@ import glob
 import torch
 from stable_baselines3 import SAC, PPO
 from sim.sim_initialize import sim_initialize
-from generate_config import generate_config
+from generate.generate_config import generate_config
 from vis.replay_buffer import ReplayBuffer
-from RL_train.train_sim_core_lower import RLEnvAdapter  # 【修改1】引入环境适配器
+from sim.train_sim_core_lower import RLEnvAdapter  # 【修改1】引入环境适配器
 from vis.sim_controller import SimulationController
 
 def sampler():
@@ -58,7 +58,7 @@ def data_processer_for_VQVAE():
             print(">>> 错误：未提取到任何有效样本，未保存文件。")
 
 def data_processer_for_TwoTower():
-    from VQVAE_skill_generate import SoftVQVAE
+    from models.vqvae.VQVAE_skill_generate import SoftVQVAE
 
     files_pattern = "*.pkl"
     source_dir = "sim_replay"

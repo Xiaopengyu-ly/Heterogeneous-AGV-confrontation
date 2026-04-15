@@ -4,10 +4,9 @@ from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 from PyQt5.QtWidgets import QApplication
 
-from RL_train.train_initialize import train_initialize
 from vis.controlled_window import ControlledVisWindow
 from sim.sim_initialize import sim_initialize
-from generate_config import generate_config
+from generate.generate_config import generate_config
 import sys
 import time
 import os
@@ -22,7 +21,7 @@ def make_env(i):
 
 def train_agent():
     # print("✅ 检查单个环境...")
-    # sim = train_initialize("./sim/config.yaml")
+    # sim = sim_initialize("./sim/config.yaml")
     # check_env(sim)
     # print("Action space type:", type(sim.action_space))
     # print("Action space:", sim.action_space)
@@ -77,10 +76,10 @@ def train_agent():
             raise(RuntimeError())
         time.sleep(2)
 
-def test_and_vis():
+def test_and_vis(policy_path : str):
     # 清理子文件夹中的匹配文件
     targets = ["config*", "grid_map*", "d_spl_map*"]
-    dirs = ["sim/config_data","sim_env/map_data"]
+    dirs = ["sim/config_data","sim/map_data"]
     for dir in dirs:
         if os.path.exists(dir):
             for pattern in targets:
@@ -95,7 +94,7 @@ def test_and_vis():
     i = 0
     generate_config(i)
     env = sim_initialize(i)
-    model = SAC.load("sac_policy_spirl")
+    model = SAC.load(policy_path)
     app = QApplication(sys.argv)
     max_steps = 2000
     data_id = 0
@@ -113,7 +112,5 @@ def test_and_vis():
     # 启动事件循环
     sys.exit(app.exec_())
 
-if __name__ == "__main__":
-    # train_agent()
-    test_and_vis()
+
 

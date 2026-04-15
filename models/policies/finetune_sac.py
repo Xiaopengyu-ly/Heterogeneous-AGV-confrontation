@@ -5,15 +5,15 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 from stable_baselines3.common.callbacks import CheckpointCallback
 
 # 直接导入你原有的初始化工具
-from RL_train.train_initialize import train_initialize
-from generate_config import generate_config
+from sim.sim_initialize import sim_initialize
+from generate.generate_config import generate_config
 
 def make_env(i):
     def _init():
         # 1. 生成每个子进程独立的配置文件
         generate_config(i)
         # 2. 调用专门针对 RL 训练的初始化函数，返回 RLEnvAdapter
-        env = train_initialize(i)
+        env = sim_initialize(i)
         return env
     return _init
 
@@ -49,10 +49,9 @@ def online_finetune():
     model.replay_buffer.reset() 
     
     # 设置定时保存机制
-    os.makedirs("./finetuned_models", exist_ok=True)
     checkpoint_callback = CheckpointCallback(
         save_freq=20000,
-        save_path="./finetuned_models/",
+        save_path="./",
         name_prefix="sac_finetuned"
     )
 

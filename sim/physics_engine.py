@@ -2,7 +2,7 @@
 import numpy as np
 import copy
 from comm.msg_pool import MsgPool
-from sim_env.env_model import env_model
+from sim.env_model import env_model
 
 class PhysicsEngine(env_model):
     def __init__(self, map_layers=None, grid_size=5, dT=0.1):

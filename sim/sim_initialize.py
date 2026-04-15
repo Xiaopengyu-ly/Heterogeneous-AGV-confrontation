@@ -2,11 +2,11 @@
 import numpy as np
 import yaml
 
-from sim_env.map_generator import MapGenerator
+from generate.generate_map import MapGenerator
 from agent.agent_core import Agent
 from comm.msg_pool import MsgPool
 from sim.physics_engine import PhysicsEngine
-from RL_train.train_sim_core_lower import RLEnvAdapter
+from sim.train_sim_core_lower import RLEnvAdapter
 
 def sim_initialize(i=None):
     # 默认读取 config.yaml，但也支持传入具体路径或编号

@@ -6,7 +6,7 @@ import random
 from typing import List, Dict, Tuple
 
 # 导入地图生成器
-from sim_env.map_generator import MapGenerator
+from generate.generate_map import MapGenerator
 
 # ======================
 # 1. 地图相关
@@ -202,8 +202,8 @@ def generate_config(i):
         version_config = yaml.safe_load(f)
     version = version_config["version"]["id"]
     config_save_path = f"E:/code/v3/version{version}/sim/config_data/config{i}.yaml"
-    full_size_map_path= f"E:/code/v3/version{version}/sim_env/map_data/grid_map{i}.npy"
-    d_sample_map_path = f"E:/code/v3/version{version}/sim_env/map_data/d_spl_map{i}.npy"
+    full_size_map_path= f"E:/code/v3/version{version}/sim/map_data/grid_map{i}.npy"
+    d_sample_map_path = f"E:/code/v3/version{version}/sim/map_data/d_spl_map{i}.npy"
     
     # === 1. 地图 ===
     map_Fixed = False

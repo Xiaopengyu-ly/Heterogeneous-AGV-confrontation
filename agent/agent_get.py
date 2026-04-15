@@ -2,8 +2,7 @@ import numpy as np
 import math
 from gymnasium import spaces
 from comm.msg_pool import MsgPool
-from agent.RoutePlanning import AStarAPF
-from sim_env.map_generator import MapGenerator
+from generate.generate_map import MapGenerator
 
 '''
     [重构版] 数据管理组件
@@ -97,44 +96,17 @@ class DataSystem:
         self.agent.grid_size = grid_size
         self.agent.grid_map = map_layers.obs_map
         self.agent.down_sampled_map = map_layers.down_sampled_map
-        self.agent.planner = AStarAPF(self.agent.down_sampled_map , lam=5.0, gamma=2.0)
     
     def _angle_diff(self, a, b):
         diff = a - b
         diff = (diff + np.pi) % (2 * np.pi) - np.pi
         return diff
 
-    def get_route_point(self, case: str = "A_star", action : np.ndarray = np.array([0,0,0,0,0]) ):
+    def get_route_point(self, case: str = "RL_Actor", action : np.ndarray = np.array([0,0,0,0,0]) ):
         match case:
             case "mid":
                 self.agent.r_point = (self.agent.t_pos + self.agent.position) / 2
                 print(self.agent.r_point, "from agentpos", self.agent.position, "\n")
-            case "A_star":
-                height, width = self.agent.grid_map.shape
-                d_height, d_width = self.agent.down_sampled_map.shape
-                block_h = height // d_height
-                block_w = width // d_width
-                grid_size = self.agent.grid_size
-                panel_center = np.array([width * grid_size / 2, height * grid_size / 2])
-                start_pos = np.array([
-                    int((self.agent.position[0] + panel_center[0]) / (block_h * grid_size)),
-                    int((self.agent.position[1] + panel_center[1]) / (block_w * grid_size))
-                ])
-                goal_pos = np.array([
-                    int((self.agent.t_pos[0] + panel_center[0]) / (block_h * grid_size)),
-                    int((self.agent.t_pos[1] + panel_center[1]) / (block_w * grid_size))
-                ])
-                path = self.agent.planner.search(start_pos, goal_pos)
-                if not path:
-                    return np.array([None, None, self.agent.theta, 1, 0])
-                raw_state = self.agent.planner.extract_waypoints(path)
-                self.agent.r_point = np.array([
-                    (raw_state[0] * block_h * grid_size - panel_center[0]) - self.agent.position[0],
-                    (raw_state[1] * block_w * grid_size - panel_center[1]) - self.agent.position[0],
-                    raw_state[2],
-                    raw_state[3],
-                    raw_state[4]
-                ])
             case "RL_Actor":
                 raw_state = action 
                 self.agent.prev_r_point = self.agent.r_point
@@ -145,21 +117,4 @@ class DataSystem:
                     raw_state[3],
                     raw_state[4]
                 ])
-
-                # # 测试用，旁路SAC
-                # self.agent.p_pos = self.agent.t_pos
-                # dx = self.agent.p_pos[0] - self.agent.position[0]
-                # dy = self.agent.p_pos[1] - self.agent.position[1]
-                # theta = self.agent.theta
-                # ex =  dx * np.cos(theta) + dy * np.sin(theta)
-                # ey = -dx * np.sin(theta) + dy * np.cos(theta)
-                # target_angle = np.arctan2(dy, dx)
-                # etheta = self._angle_diff(theta, target_angle)
-                # self.agent.r_point = np.array([
-                #     ex,
-                #     ey,
-                #     etheta,
-                #     raw_state[3],
-                #     raw_state[4]
-                # ])
         return self.agent.r_point

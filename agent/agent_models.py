@@ -1,6 +1,6 @@
 import numpy as np
 import random
-from agent.bot_controller import guidance_with_obstacle_avoidance
+from agent.control.bot_controller import guidance_with_obstacle_avoidance
 from agent.MapProcess import MapProcesser
 
 def normalize_angle(angle):
