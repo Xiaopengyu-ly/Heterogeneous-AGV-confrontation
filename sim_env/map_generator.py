@@ -2,7 +2,7 @@
 import numpy as np
 
 class MapGenerator:
-    def __init__(self, width, height, isBlank = False, scale=20, threshold=0.5, seed=None):# 50,0.3
+    def __init__(self, width, height, isBlank = False, scale=30, threshold=0.5, seed=None):# 50,0.3
         self.width = width
         self.height = height
         self.d_sample_hw = None
