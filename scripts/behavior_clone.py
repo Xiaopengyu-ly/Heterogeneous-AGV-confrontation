@@ -15,9 +15,9 @@ CONFIG = {
     # 严格对齐: history_goal(9) + lidar(36) + prev_act(15) + rel_goal(3) + semantic/skill(5) = 68
     'input_dim': 68,      
     'output_dim': 15,       # Action Chunking (3步 * 5维)
-    'model_save_path': 'pure_bc_mlp_aligned.pth',
-    'sac_base_path': 'sac_policy_spirl.zip',      # 初始 SAC 模型
-    'sac_save_path': 'sac_policy_bc.zip',   # 注入后的部署模型
+    'model_save_path': 'models/policies/pure_bc_mlp_aligned.pth',
+    'sac_base_path': 'models/policies/sac_policy_spirl.zip',      # 初始 SAC 模型
+    'sac_save_path': 'models/policies/sac_policy_bc.zip',   # 注入后的部署模型
     'dataset_obs': 'dataset/dynamics_dataset_obs.npy',
     'dataset_skills': 'dataset/dynamics_dataset_skills.npy',
     'dataset_actions': 'dataset/dynamics_dataset_actions.npy',

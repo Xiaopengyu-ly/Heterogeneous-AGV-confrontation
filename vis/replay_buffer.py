@@ -14,20 +14,20 @@ class ReplayBuffer:
         return random.sample(self.buffer, min(len(self.buffer), batch_size))
     def __len__(self):
         return len(self.buffer)
-    def save_buffer(self, filepath: str = "sim_replay/0.pkl"):
+    def save_buffer(self, filepath: str = "sim/sim_replay/0.pkl"):
         # 将 deque 转为 list（pickle 可以处理，但 list 更通用）
         buffer_list = list(self.buffer)
         with open(filepath, 'wb') as f:
             pickle.dump(buffer_list, f)
         print(f"Replay buffer saved to {filepath} with {len(buffer_list)} transitions.")
-    def read_buffer(self, filepath: str = "sim_replay/0.pkl"):
+    def read_buffer(self, filepath: str = "sim/sim_replay/0.pkl"):
         with open(filepath, 'rb') as f:
             buffer_list = pickle.load(f)
         self.buffer = deque(buffer_list, maxlen=self.buffer.maxlen)
         print(f"Replay buffer loaded from {filepath} with {len(self.buffer)} transitions.")
 
 
-    def extract_action_dataset(self, filepath: str = "sim_replay/0.pkl", slice_len: int = 5):
+    def extract_action_dataset(self, filepath: str = "sim/sim_replay/0.pkl", slice_len: int = 5):
         import pickle
         import numpy as np
         
@@ -103,7 +103,7 @@ class ReplayBuffer:
         return final_data
 
 
-    def extract_dynamics_dataset(self, vq_model, Horizen_len: int, filepath: str = "sim_replay/0.pkl", seq_len: int = 3):
+    def extract_dynamics_dataset(self, vq_model, Horizen_len: int, filepath: str = "sim/sim_replay/0.pkl", seq_len: int = 3):
         import torch
         import pickle
         import numpy as np

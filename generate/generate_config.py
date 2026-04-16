@@ -11,20 +11,21 @@ from generate.generate_map import MapGenerator
 # ======================
 # 1. 地图相关
 # ======================
-def generate_or_load_map(width: int, height: int, full_size_map_path: str, d_sample_map_path : str, map_Fixed : bool, isBlank : bool, d_sample_hw : np.ndarray) -> np.ndarray:
+# map_params = [width, height, full_size_map_path, d_sample_map_path, map_Fixed, isBlank, d_sample_hw,obs_dense[0],obs_dense[1]]
+def generate_or_load_map(map_params : list) -> np.ndarray:
     """生成或加载障碍物地图"""
-    if map_Fixed:
-        obs_map = np.load(full_size_map_path)
-        d_spl_map = np.load(d_sample_map_path)
+    if map_params[4]:
+        obs_map = np.load(map_params[2])
+        d_spl_map = np.load(map_params[3])
         return obs_map, d_spl_map
-    map_gen = MapGenerator(width, height, isBlank)
-    map_gen.generate_map(d_sample_hw)
+    map_gen = MapGenerator(map_params[0], map_params[1], map_params[5], map_params[7], map_params[8])
+    map_gen.generate_map(map_params[6])
     # grid_map = map_gen.layers["obs_map"]
     obs_map = map_gen.obs_map
     d_spl_map = map_gen.down_sampled_map
-    np.save(full_size_map_path, obs_map)
-    np.save(d_sample_map_path, d_spl_map)
-    print(f"✅ 地图已保存至: {full_size_map_path} 、{d_sample_map_path}")
+    np.save(map_params[2], obs_map)
+    np.save(map_params[3], d_spl_map)
+    print(f"✅ 地图已保存至: {map_params[2]} 、{map_params[3]}")
     return obs_map, d_spl_map
 
 def get_random_positions(grid_map: np.ndarray, agent_num: int, red_num: int, grid_size: float, min_clearance: int = 5) -> np.ndarray:
@@ -169,7 +170,7 @@ def build_formation_structure(
 # ======================
 # 5. Agent 配置分配（核心新增）
 # ======================
-def assign_agent_profiles(agent_num: int, agent_side: np.ndarray) -> List[str]:
+def assign_agent_profiles(agent_side: np.ndarray) -> List[str]:
     """
     为每个 agent 分配配置 profile 名称。
     可根据 side 或随机选择预定义类型。
@@ -190,13 +191,13 @@ def assign_agent_profiles(agent_num: int, agent_side: np.ndarray) -> List[str]:
 # ======================
 # 6. 主函数
 # ======================
-def generate_config(i):
+def generate_config(i, rb_num : list = [1,0], obs_dense : list = [30,0.5]):
     # random.seed(42)
     # === 基础参数 ===
     width, height = 256, 256
     grid_size = int(3)
     d_sample_hw = np.array([32,32])
-    side_num = {"red" : 5, "blue" : 5}
+    side_num = {"red" : rb_num[0], "blue" : rb_num[1]}
     agent_num = sum(side_num.values())
     with open("./version.yaml", "r") as f:
         version_config = yaml.safe_load(f)
@@ -208,7 +209,8 @@ def generate_config(i):
     # === 1. 地图 ===
     map_Fixed = False
     isBlank = True if random.random() < 0.05 else False
-    obs_map, d_spl_map = generate_or_load_map(width, height, full_size_map_path, d_sample_map_path, map_Fixed, isBlank, d_sample_hw)
+    map_params = [width, height, full_size_map_path, d_sample_map_path, map_Fixed, isBlank, d_sample_hw,obs_dense[0],obs_dense[1]]
+    obs_map, d_spl_map = generate_or_load_map(map_params)
     # === 2. Agent 基础属性 ===
     agent_dT = [0.02] * agent_num
     agent_id = random.sample(range(1, agent_num * 5), agent_num)
@@ -226,7 +228,7 @@ def generate_config(i):
     formation_structure = build_formation_structure(agent_id, agent_side, pos, com_tensor)
 
     # === 6. 【新增】Agent 配置 profile 分配 ===
-    agent_profiles = assign_agent_profiles(agent_num, agent_side)
+    agent_profiles = assign_agent_profiles(agent_side)
 
     # === 7. 构建完整配置字典 ===
     config = {

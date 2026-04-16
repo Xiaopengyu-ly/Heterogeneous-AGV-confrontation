@@ -1,15 +1,12 @@
 # vis/sim_controller.py
 from vis.replay_buffer import ReplayBuffer
 import numpy as np
-import os
-import torch
-from agent.planning.latent_mpc_search import latent_mpc_search
-
+from agent.planning.agent_PNC import AgentPNC # 引入新的解耦模块
 
 class SimulationController:
     def __init__(self, simulation, config=None):
         self.env = simulation
-        # 兼容处理：如果是 Adapter，取出内部 Engine；如果是 Engine，直接用
+        # 兼容处理
         if hasattr(simulation, 'engine'):
             self.engine = simulation.engine
         elif hasattr(simulation, 'sim'):
@@ -25,48 +22,10 @@ class SimulationController:
         self.max_steps = self.config.get("max_steps", 300)
         self.data_id = self.config.get("data_id", 0)
         
-        # 底层 RL 模型 (现在它是由 BC 注入后的 SAC)
-        lower_model = self.config.get("lower_actor")
-        self.lower_model = lower_model if lower_model is not None else None
+        # ★ 将复杂的模型加载与推理委托给 AgentPNC ★
+        self.pnc_controller = AgentPNC(self.config)
 
-        # =========================================================
-        # ★ Latent MPC 核心组件初始化 ★
-        # =========================================================
-        self.use_latent_mpc = self.config.get("use_latent_mpc", True)
-        if self.use_latent_mpc:
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            self.num_skills = 16
-            self.horizon = 3
-            self.POS_LIMIT = 500.0
-            self.ANG_LIMIT = np.pi
-
-            print(">>> 正在初始化 Latent MPC 组件 (VQ-VAE + Forward Model)...")
-            
-            # 1. 加载 VQ-VAE 提取技能码本
-            from models.vqvae.VQVAE_skill_generate import SoftVQVAE
-            vqvae_path = self.config.get("vqvae_path", "vqvae_skills.pth")
-            self.vq_model = SoftVQVAE(seq_len=3, action_dim=5, latent_dim=4, num_skills=self.num_skills).to(self.device)
-            if os.path.exists(vqvae_path):
-                self.vq_model.load_state_dict(torch.load(vqvae_path, map_location=self.device))
-            self.vq_model.eval()
-
-            with torch.no_grad():
-                # 映射码本到 [0, 1] 防止越界警告
-                codebook = self.vq_model.vq.embedding.weight.data
-                codebook = (codebook + 1.0) / 2.0 
-                ids = torch.arange(self.num_skills).float().to(self.device).unsqueeze(1) / self.num_skills
-                self.skill_vecs = torch.cat([codebook, ids], dim=1) 
-
-            # 2. 加载双塔动力学预测模型
-            from models.predictors.agent_dyn_predictor import ForwardPredictor 
-            forward_path = self.config.get("forward_path", "forward_model.pth")
-            self.forward_model = ForwardPredictor(horizon=self.horizon).to(self.device)
-            if os.path.exists(forward_path):
-                self.forward_model.load_state_dict(torch.load(forward_path, map_location=self.device))
-            self.forward_model.eval()
-            print(">>> Latent MPC 模块已激活！")
-
-        self.buffer_path_template = f"sim_replay/{self.data_id}.pkl"
+        self.buffer_path_template = f"sim/sim_replay/{self.data_id}.pkl"
         self.replay_buffer = ReplayBuffer(capacity=self.config.get("buffer_capacity", 10000))
         
         self.step_count = 0
@@ -114,49 +73,23 @@ class SimulationController:
             else:
                  obs_dict = self.obs 
             
-            action_dict = {}
-            if self.lower_model is not None:
-                # --- 底层模型决策 ---
-                for agent_id, obs in obs_dict.items():
-                    
-                    # =============================================
-                    # ★ 执行 Latent MPC，将高阶意图注入给底层 SAC ★
-                    # =============================================
-                    if self.use_latent_mpc:
-                        best_skill = latent_mpc_search(self, obs)
-                        # 覆盖 semantic 预留位，实现“意识夺舍”
-                        obs['semantic'] = best_skill
-
-                    if callable(getattr(self.lower_model, "compute_single_action", None)):
-                        action = self.lower_model.compute_single_action(observation=obs, explore=False)
-                    elif callable(getattr(self.lower_model, "predict", None)):
-                        action, _states = self.lower_model.predict(obs, deterministic=True)
-                        # SAC 输出是15维(Action Chunking)，我们只截取第一步的 5 维用于物理执行
-                        action = action[:5] 
-                    else:
-                        raise ValueError("Unknown lower_model type.")
-                    action_dict[agent_id] = action
-            else:
-                for agent_id in obs_dict.keys():
-                    action_dict[agent_id] = None
+            # 1. 策略推理（委托给 PNC 模块执行）
+            action_dict = self.pnc_controller.compute_actions(obs_dict)
             
-            # 1. 环境步进
+            # 2. 环境步进
             next_obs_dict, rewards, dones, truncated, info = self.env.step(action_dict)
-            
-            # 2. 获取当前物理状态用于存储
             current_phys_state = self.engine._get_agent_data_struct()
             all_done = all(dones.values()) if dones else False
 
             # 3. 将实时数据推送到 Buffer
             buffer_action = action_dict if action_dict else np.zeros(5, dtype=np.float32)
-            
             self.replay_buffer.push(
                 state=self.prev_phys_state,   
-                obs = self.obs,     
+                obs=self.obs,     
                 action=buffer_action, 
                 reward=rewards,
                 next_state=current_phys_state, 
-                next_obs= next_obs_dict,
+                next_obs=next_obs_dict,
                 done=all_done
             )
             

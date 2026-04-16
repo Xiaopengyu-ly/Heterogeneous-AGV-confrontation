@@ -12,6 +12,7 @@ import time
 import os
 import glob
 import shutil
+
 def make_env(i):
     def _init():
         generate_config(i)
@@ -19,7 +20,7 @@ def make_env(i):
         return sim
     return _init
 
-def train_agent():
+def train_agent(env_nums : int = 9, steps : int = 100000, iter : int = 1, policy_path : str = "models/policies/sac_policy"):
     # print("✅ 检查单个环境...")
     # sim = sim_initialize("./sim/config.yaml")
     # check_env(sim)
@@ -30,14 +31,18 @@ def train_agent():
     # total_timesteps= 30000 左右能训练得到目标导引能力
     # 在不同地图切换下，训练 iteration 轮
     # 需通过generate_config.py保证训练时环境中只有一个agent（测试时不限制个数）
-    iteration = 1
+    iteration = iter
     for iter in range(iteration):
-        num_envs = 12
+        num_envs = env_nums
         print(f"🧠 启动多进程训练（{num_envs} 个环境）...")
         env = SubprocVecEnv([make_env(i) for i in range(num_envs)])
         env = VecMonitor(env, filename=f"./logs/monitor{iter}.csv")
-        case = 1 if iter == 0 else 1
-        model_path = "sac_policy"
+        case = 0 if iter == 0 else 1
+        if os.path.exists(policy_path) and case == 1:
+            model = SAC.load(policy_path, env=env)
+            print(f"🔄 加载模型 '{policy_path}'，继续训练")
+        else:
+            case = 0
         try:
             if case == 0:
                 print("🆕 从头开始训练（case=0）")
@@ -56,18 +61,17 @@ def train_agent():
                 )
                 reset_timesteps = True
             else:
-                print(f"🔄 加载模型 '{model_path}'，继续训练（case={case}）")
-                model = SAC.load(model_path, env=env)
+                
                 model.replay_buffer.pos = 0
                 reset_timesteps = False
             model.learn(
-                total_timesteps = 500000,   # 至少 total_timesteps 步 ，200000一轮课程比较稳定
+                total_timesteps = steps,   # 至少 total_timesteps 步 ，200000一轮课程比较稳定
                 progress_bar = True,
                 log_interval = 20000,          # 每 log_interval 步打印一次
                 reset_num_timesteps=reset_timesteps
             )
-            model.save(model_path)
-            print(f"💾 模型已保存为 {model_path} ")
+            model.save(policy_path)
+            print(f"💾 模型已保存为 {policy_path} ")
             env.close()
             del env
         except:
@@ -76,24 +80,39 @@ def train_agent():
             raise(RuntimeError())
         time.sleep(2)
 
-def test_and_vis(policy_path : str):
-    # 清理子文件夹中的匹配文件
-    targets = ["config*", "grid_map*", "d_spl_map*"]
-    dirs = ["sim/config_data","sim/map_data"]
-    for dir in dirs:
-        if os.path.exists(dir):
-            for pattern in targets:
-                files = glob.glob(os.path.join(dir, pattern))
-                for f in files:
-                    try:
-                        os.remove(f)
-                        print(f"Deleted: {f}")
-                    except OSError as e:
-                        print(f"Error deleting {f}: {e}")
+def clean_dir(clean_mode : str = "configmap"):
+    if clean_mode == "configmap":
+        # 清理子文件夹中的匹配文件
+        targets = ["config*", "grid_map*", "d_spl_map*"]
+        dirs = ["sim/config_data","sim/map_data"]
+        for dir in dirs:
+            if os.path.exists(dir):
+                for pattern in targets:
+                    files = glob.glob(os.path.join(dir, pattern))
+                    for f in files:
+                        try:
+                            os.remove(f)
+                            print(f"Deleted: {f}")
+                        except OSError as e:
+                            print(f"Error deleting {f}: {e}")
+    elif clean_mode == "all":
+        # 清理子文件夹中的匹配文件
+        targets = ["*"]
+        dirs = ["sim/config_data","sim/map_data","sim/sim_replay"]
+        for dir in dirs:
+            if os.path.exists(dir):
+                for pattern in targets:
+                    files = glob.glob(os.path.join(dir, pattern))
+                    for f in files:
+                        try:
+                            os.remove(f)
+                            print(f"Deleted: {f}")
+                        except OSError as e:
+                            print(f"Error deleting {f}: {e}")
+
+def test_and_vis(policy_path : str, config_id : int = 0):
     print("🧪 加载模型并测试 ...")
-    i = 0
-    generate_config(i)
-    env = sim_initialize(i)
+    env = sim_initialize(config_id)
     model = SAC.load(policy_path)
     app = QApplication(sys.argv)
     max_steps = 2000

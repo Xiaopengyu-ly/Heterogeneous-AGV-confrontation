@@ -9,7 +9,7 @@ import os
 
 # ================= 0. 配置 =================
 CONFIG = {
-    'T': 5,                # 必须与提取器中的 slice_len / Action Chunking Horizon 对齐
+    # 'T': 10,                # 必须与提取器中的 slice_len / Action Chunking Horizon 对齐
     'action_dim': 5,       # 动作维度
     'latent_dim': 4,       # 4维隐空间
     'num_skills': 16,      # 16个基础技能
@@ -17,7 +17,7 @@ CONFIG = {
     'lr': 1e-3,
     'epochs_ae': 100,      # 增加迭代次数
     'temperature': 1.0,    # Softmax 温度，控制连续性。越小越接近离散，越大越连续。
-    'model_path_ae': 'vqvae_skills.pth',
+    'model_path_ae': 'models/vqvae/vqvae_skills.pth',
     'device': 'cuda' if torch.cuda.is_available() else 'cpu'
 }
 
@@ -56,7 +56,7 @@ class SoftQuantizer(nn.Module):
         return quantized, ortho_loss, indices
 
 class SoftVQVAE(nn.Module):
-    def __init__(self, seq_len=3, action_dim=5, latent_dim=4, num_skills=16):
+    def __init__(self, seq_len = 5, action_dim = 5, latent_dim = 4, num_skills = 16):
         super().__init__()
         self.seq_len = seq_len
         self.action_dim = action_dim
@@ -95,7 +95,7 @@ class SoftVQVAE(nn.Module):
         return recon, ortho_loss, indices
 
 # ================= 2. 改进后的训练函数 =================
-def train_soft_vqvae(raw_data):
+def train_soft_vqvae(raw_data,seq_len : int = 5):
     data_tensor = torch.FloatTensor(raw_data).to(device)
     train_size = int(0.8 * len(data_tensor))
     train_db, val_db = random_split(TensorDataset(data_tensor), [train_size, len(data_tensor)-train_size])
@@ -104,7 +104,7 @@ def train_soft_vqvae(raw_data):
     val_loader = DataLoader(val_db, batch_size=CONFIG['batch_size'])
     
     # 【核心修改 2】实例化时严格传入 seq_len
-    model = SoftVQVAE(seq_len=CONFIG['T'], action_dim=CONFIG['action_dim'], 
+    model = SoftVQVAE(seq_len , action_dim=CONFIG['action_dim'], 
                       latent_dim=CONFIG['latent_dim'], num_skills=CONFIG['num_skills']).to(device)
                       
     optimizer = optim.Adam(model.parameters(), lr=CONFIG['lr'])
@@ -139,7 +139,7 @@ def train_soft_vqvae(raw_data):
     return model
 
 # ================= 3. 改进后的可视化 =================
-def visualize_continuous_interpolation(model):
+def visualize_continuous_interpolation(model, seq_len : int = 5):
     """
     可视化连续性：展示从 Skill A 平滑过渡到 Skill B 的过程
     """
@@ -159,7 +159,7 @@ def visualize_continuous_interpolation(model):
             interp_vec = (1 - alpha) * vec_a + alpha * vec_b
             
             # 【核心修改 3】解码结果利用 config 动态展开
-            recon_skill = model.dec(interp_vec.unsqueeze(0)).view(CONFIG['T'], CONFIG['action_dim']).cpu().numpy()
+            recon_skill = model.dec(interp_vec.unsqueeze(0)).view( seq_len, CONFIG['action_dim']).cpu().numpy()
             
             plt.subplot(2, 5, i+1)
             plt.plot(recon_skill[:, 4], label='w_pred', color='red', marker='.') 
@@ -169,29 +169,29 @@ def visualize_continuous_interpolation(model):
             
             plt.title(f"Interp: {alpha:.1f}")
             plt.ylim(-1.1, 1.1)
-            plt.xticks(range(CONFIG['T'])) # 明确展示横坐标步数
+            plt.xticks(range(seq_len)) # 明确展示横坐标步数
             if i == 0: 
                 plt.legend(loc='lower left', fontsize='small')
         
-        plt.suptitle(f"Continuous Skill Interpolation (Transition from Skill {id_a} to {id_b}, T={CONFIG['T']})")
+        plt.suptitle(f"Continuous Skill Interpolation (Transition from Skill {id_a} to {id_b}, T={seq_len})")
         plt.tight_layout()
         plt.show()
 
-def main():
-    raw_data = np.load("dataset/action_dataset.npy")
-    print(f">>> 成功加载动作数据集，形状: {raw_data.shape}")
+# def main():
+#     raw_data = np.load("dataset/action_dataset.npy")
+#     print(f">>> 成功加载动作数据集，形状: {raw_data.shape}")
     
-    if os.path.exists(CONFIG['model_path_ae']):
-        # 【核心修改 4】实例化时严格传入 seq_len
-        model = SoftVQVAE(seq_len=CONFIG['T'], action_dim=CONFIG['action_dim'], 
-                          latent_dim=CONFIG['latent_dim'], num_skills=CONFIG['num_skills']).to(device)
-        model.load_state_dict(torch.load(CONFIG['model_path_ae']))
-        print(">>> 加载已有模型")
-    else:
-        model = train_soft_vqvae(raw_data)
+#     if os.path.exists(CONFIG['model_path_ae']):
+#         # 【核心修改 4】实例化时严格传入 seq_len
+#         model = SoftVQVAE(seq_len=CONFIG['T'], action_dim=CONFIG['action_dim'], 
+#                           latent_dim=CONFIG['latent_dim'], num_skills=CONFIG['num_skills']).to(device)
+#         model.load_state_dict(torch.load(CONFIG['model_path_ae']))
+#         print(">>> 加载已有模型")
+#     else:
+#         model = train_soft_vqvae(raw_data)
     
-    # 训练完毕后，可以解开注释执行连续性验证
-    visualize_continuous_interpolation(model)
+#     # 训练完毕后，可以解开注释执行连续性验证
+#     visualize_continuous_interpolation(model)
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()

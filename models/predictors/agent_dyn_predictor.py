@@ -8,13 +8,11 @@ import matplotlib.pyplot as plt
 
 # ================= 0. 全局配置 =================
 CONFIG = {
-    'H': 3,
-    'num_skills': 16,
-    'hidden_dim': 512,      
-    'batch_size': 1024,     
+    'num_skills': 16,   
+    'batch_size': 256,  # 1024     
     'lr': 5e-4,
-    'epochs': 40,
-    'model_path': './forward_model.pth',
+    'epochs': 10,
+    'model_path': 'models/predictors/forward_model.pth',
     'dataset_obs': 'dataset/dynamics_dataset_obs.npy',
     'dataset_skills': 'dataset/dynamics_dataset_skills.npy',
     'dataset_targets': 'dataset/dynamics_dataset_trajectorys.npy',
@@ -47,7 +45,7 @@ def circular_gradient_loss(pred_lidar, target_lidar):
 # ================= 2. 双塔 Transformer 模型 =================
 class ForwardPredictor(nn.Module):
     # 【修正2】适应全新的 68 维观测：lidar=36, 剩余辅助特征 aux_dim=32 (3+5+15+9)
-    def __init__(self, lidar_dim=36, aux_dim=32, skill_dim=5, hidden_dim=512, horizon=10):
+    def __init__(self, lidar_dim=36, aux_dim=32, skill_dim=5, hidden_dim=128, horizon=20):
         super().__init__()
         self.horizon = horizon
         self.state_dim = lidar_dim + aux_dim  # 总维度 68
@@ -115,7 +113,7 @@ class ForwardPredictor(nn.Module):
             return pred_out
 
 # ================= 3. 训练流程 =================
-def train_forward_model():
+def train_forward_model(predict_horizen : int = 5):
     obs = np.load(CONFIG['dataset_obs'])
     skills = np.load(CONFIG['dataset_skills'])
     targets = np.load(CONFIG['dataset_targets'])
@@ -136,7 +134,7 @@ def train_forward_model():
     val_loader = DataLoader(val_ds, batch_size=CONFIG['batch_size'])
 
     # 动态传入 Horizon
-    model = ForwardPredictor(horizon=CONFIG['H']).to(device)
+    model = ForwardPredictor(horizon = predict_horizen).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=CONFIG['lr'], weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CONFIG['epochs'])
     scaler = torch.amp.GradScaler()
@@ -181,13 +179,12 @@ def train_forward_model():
     return model
 
 # ================= 4. 可视化与主函数 =================
-def visualize_imagined_trajectories(forward_model, test_obs, vq_path='vqvae_skills.pth', num_skills=16):
+def visualize_imagined_trajectories(forward_model, test_obs, predict_horizen = 5, vq_len = 5, vq_path='models/vqvae/vqvae_skills.pth', num_skills=16):
     forward_model.eval()
     device = next(forward_model.parameters()).device
 
-    # 【修正3】实例化 VQVAE 时，必须使用 seq_len=3 (与最新训练的VQVAE对齐)
-    from VQVAE_skill_generate import SoftVQVAE 
-    vq_model = SoftVQVAE(seq_len=3, action_dim=5, latent_dim=4, num_skills=num_skills).to(device)
+    from models.vqvae.VQVAE_skill_generate import SoftVQVAE 
+    vq_model = SoftVQVAE(seq_len=vq_len, action_dim=5, latent_dim=4, num_skills=num_skills).to(device)
     if os.path.exists(vq_path):
         vq_model.load_state_dict(torch.load(vq_path, map_location=device))
         vq_model.eval()
@@ -230,7 +227,7 @@ def visualize_imagined_trajectories(forward_model, test_obs, vq_path='vqvae_skil
         ax1.text(preds_abs[i, -1, 36], preds_abs[i, -1, 37], f"S{i}", fontsize=10)
     
     ax1.scatter(current_state[36], current_state[37], c='black', marker='X', s=100, label='Current Pos')
-    ax1.set_title(f"Imagined Future Trajectories (Horizon={CONFIG['H']})")
+    ax1.set_title(f"Imagined Future Trajectories (Horizon={predict_horizen})")
     ax1.set_xlabel("Relative X (Normalized)")
     ax1.set_ylabel("Relative Y (Normalized)")
     ax1.legend()
@@ -238,7 +235,7 @@ def visualize_imagined_trajectories(forward_model, test_obs, vq_path='vqvae_skil
     
     # --- 右图：雷达剖面变形预测 ---
     sample_id = np.random.randint(0, num_skills)
-    step = CONFIG['H'] - 1  # 观察最后一帧的预测雷达
+    step = predict_horizen - 1  # 观察最后一帧的预测雷达
     ax2.plot(current_state[:36], 'b-', label='Current Lidar Scan', lw=2)
     
     pred_lidar = np.clip(preds_abs[sample_id, step, :36], 0, 1)
@@ -254,7 +251,7 @@ def visualize_imagined_trajectories(forward_model, test_obs, vq_path='vqvae_skil
 
 def main():
     # 动态传入 Horizon
-    model = ForwardPredictor(horizon=CONFIG['H']).to(device)
+    model = ForwardPredictor(horizon=5).to(device)
     if os.path.exists(CONFIG['model_path']):
         print(">>> Loading model...")
         model.load_state_dict(torch.load(CONFIG['model_path'], map_location=device))

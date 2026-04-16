@@ -6,14 +6,13 @@ from stable_baselines3 import SAC, PPO
 from sim.sim_initialize import sim_initialize
 from generate.generate_config import generate_config
 from vis.replay_buffer import ReplayBuffer
-from sim.train_sim_core_lower import RLEnvAdapter  # 【修改1】引入环境适配器
+from sim.train_sim_core import RLEnvAdapter  # 【修改1】引入环境适配器
 from vis.sim_controller import SimulationController
 
-def sampler():
-    sample_iter = 200
-    model = SAC.load("sac_policy_spirl", device='cpu')
-    for iter in range(sample_iter):
-        generate_config(iter)
+def sampler(sample_num : int = 10, policy_path : str = "models/policies/sac_policy", rb_num : list = [1,0], obs_dense = [30,0.5]):
+    model = SAC.load(policy_path, device='cpu')
+    for iter in range(sample_num):
+        generate_config(iter, rb_num, obs_dense)
         env = sim_initialize(iter)
         max_steps = 2000
         config = {
@@ -22,7 +21,7 @@ def sampler():
             "data_id": iter,
             "buffer_capacity": max_steps,
             "lower_actor": model,
-            "use_latent_mpc" : True
+            "use_latent_mpc" : False  # 关键设置，用于技能提取不需要开启latent mpc
         }
         sim_controller = SimulationController(env, config)
         while True:
@@ -31,9 +30,9 @@ def sampler():
                 print(f"采样第 {iter} 轮结束")
                 break
 
-def data_processer_for_VQVAE():
+def data_processer_for_VQVAE(slice_len : int = 5):
     files_pattern = "*.pkl"
-    source_dir = "sim_replay"
+    source_dir = "sim/sim_replay"
     action_dataset_path = "dataset/action_dataset.npy"
     os.makedirs(os.path.dirname(action_dataset_path), exist_ok=True)
     
@@ -45,7 +44,7 @@ def data_processer_for_VQVAE():
         print(f">>> 找到 {len(files)} 个数据文件")
         
         for f in files:
-            action_dump = buffer.extract_action_dataset(f)
+            action_dump = buffer.extract_action_dataset(f , slice_len)
             if action_dump is not None and len(action_dump) > 0:
                 action_dataset_list.append(action_dump)
         
@@ -54,24 +53,24 @@ def data_processer_for_VQVAE():
             print(f">>> 最终数据集形状: {final_action_dataset.shape}")
             np.save(action_dataset_path, final_action_dataset)
             print(f">>> 数据集已保存至: {action_dataset_path}")
+            return final_action_dataset
         else:
             print(">>> 错误：未提取到任何有效样本，未保存文件。")
 
-def data_processer_for_TwoTower():
+def data_processer_for_TwoTower(skill_len : int = 5, horizon_len : int = 10):
     from models.vqvae.VQVAE_skill_generate import SoftVQVAE
-
     files_pattern = "*.pkl"
-    source_dir = "sim_replay"
+    source_dir = "sim/sim_replay"
     dataset_path = "dataset/dynamics_dataset"
     os.makedirs(os.path.dirname(dataset_path), exist_ok=True)
     
-    # 【修改5】关键配置：将技能长度对齐到底层 Action Chunking 的 Horizon 长度
+    #  关键配置：将技能长度对齐到底层 Action Chunking 的 Horizon 长度
     CONFIG = {
-        'T': 5,             # 技能长度 (Horizon = 3)
-        'H': 10,            # 预测视界 (未来 10 步的轨迹)
+        'T': skill_len,             # 技能长度 (Horizon = 3)
+        'H': horizon_len,            # 预测视界 (未来 10 步的轨迹)
         'latent_dim': 4,
         'num_skills': 16,
-        'model_path_ae': 'vqvae_skills.pth',
+        'model_path_ae': 'models/vqvae/vqvae_skills.pth',
         'device': 'cuda' if torch.cuda.is_available() else 'cpu'
     }
     device = torch.device(CONFIG['device'])
@@ -121,6 +120,7 @@ def data_processer_for_TwoTower():
             np.save(f"{dataset_path}_actions.npy", action_dataset)
             np.save(f"{dataset_path}_trajectorys.npy", future_trajectory_dataset)
             print(f">>> 数据集已保存至: {dataset_path} ")
+            return curr_obs_dataset
         else:
             print(">>> 错误：未提取到任何有效样本。")
 

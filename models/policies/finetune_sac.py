@@ -17,8 +17,7 @@ def make_env(i):
         return env
     return _init
 
-def online_finetune():
-    num_envs = 12 # 保持你习惯的 12 个并行环境
+def sac_finetune(num_envs : int = 12, steps : int = 100000, policy_path : str = "models/policies/sac_policy_finetuned"):
     print(f"🧠 启动 SPiRL 多进程微调（{num_envs} 个并行环境）...")
     
     # 构建并行环境
@@ -26,7 +25,7 @@ def online_finetune():
     env = VecMonitor(env, filename="./logs/finetune_monitor.csv")
 
     # 确定 BC 模型路径
-    model_path = "sac_policy_bc"
+    model_path = "models/policies/sac_policy_bc"
     if not os.path.exists(model_path + ".zip") and not os.path.exists(model_path):
         raise FileNotFoundError(f"找不到 BC 权重文件: {model_path}")
 
@@ -51,7 +50,7 @@ def online_finetune():
     # 设置定时保存机制
     checkpoint_callback = CheckpointCallback(
         save_freq=20000,
-        save_path="./",
+        save_path="models/policies/",
         name_prefix="sac_finetuned"
     )
 
@@ -60,22 +59,22 @@ def online_finetune():
     try:
         # 微调训练轮数不需要从头训练那么多
         model.learn(
-            total_timesteps=300_000, 
+            total_timesteps=steps, 
             callback=checkpoint_callback,
             progress_bar=True,
-            log_interval=10,
+            log_interval=100,
             reset_num_timesteps=False # 保持步数累计
         )
         
         # 最终保存为 spirl 模型
-        model.save("sac_policy_spirl")
-        print("💾 微调彻底完成！模型已保存为 sac_policy_spirl.zip")
+        model.save(policy_path)
+        print(f"💾 微调彻底完成！模型已保存为 {policy_path}")
         
     except KeyboardInterrupt:
-        print("\n⚠️ 训练被手动中断，正在保存当前进度...")
-        model.save("sac_policy_spirl_interrupted")
+        print(f"\n⚠️ 训练被手动中断，正在保存当前进度至{policy_path}...")
+        model.save(policy_path)
     finally:
         env.close()
 
 if __name__ == "__main__":
-    online_finetune()
+    sac_finetune(12, 100000, "models/policies/sac_policy_finetuned")
