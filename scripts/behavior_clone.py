@@ -11,7 +11,7 @@ import os
 CONFIG = {
     'batch_size': 1024,
     'lr': 1e-3,
-    'epochs': 70,
+    'epochs': 100,
     # 严格对齐: history_goal(9) + lidar(36) + prev_act(15) + rel_goal(3) + semantic/skill(5) = 68
     'input_dim': 68,      
     'output_dim': 15,       # Action Chunking (3步 * 5维)

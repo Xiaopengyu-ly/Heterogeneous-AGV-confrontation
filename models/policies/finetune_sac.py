@@ -6,12 +6,12 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 
 # 直接导入你原有的初始化工具
 from sim.sim_initialize import sim_initialize
-from generate.generate_config import generate_config
+from generate.generate_config import generate_agent_config
 
 def make_env(i):
     def _init():
         # 1. 生成每个子进程独立的配置文件
-        generate_config(i)
+        generate_agent_config(i)
         # 2. 调用专门针对 RL 训练的初始化函数，返回 RLEnvAdapter
         env = sim_initialize(i)
         return env

@@ -44,7 +44,8 @@ class DataSystem:
             self.agent.neighbors_info["position"][f"{nid}"] = np.array([0, 0])
             self.agent.neighbors_info["velo"][f"{nid}"] = np.array([0, 0])
             self.agent.neighbors_info["formdist"][f"{nid}"] = formation_structure.get((self.agent.id, nid))
-        
+        print(self.agent.id, ' COOP,' , self.agent.neighbors_id, ' ,', self.agent.neighbors_info)
+
         # Targets Logic
         nodes = targets_dict[f"{self.agent.id}"]
         self.agent.targets_id = []

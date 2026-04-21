@@ -59,7 +59,7 @@ class BehaviorSystem(MapProcesser):
             else np.hstack((self.agent.t_pos - self.agent.position, np.array([self.agent.theta, 1e-2, 1e-2])))
         
         # 注意：这里 guidance_with_obstacle_avoidance 需要 agent 实例
-        v_des, w_des = guidance_with_obstacle_avoidance(self.agent, guide_state)
+        v_des, w_des, self.agent.dv, self.agent.dw = guidance_with_obstacle_avoidance(self.agent, guide_state)
         
         self.agent.v = v_des
         self.agent.w = w_des

@@ -4,7 +4,7 @@ import glob
 import torch
 from stable_baselines3 import SAC, PPO
 from sim.sim_initialize import sim_initialize
-from generate.generate_config import generate_config
+from generate.generate_config import generate_agent_config
 from vis.replay_buffer import ReplayBuffer
 from sim.train_sim_core import RLEnvAdapter  # 【修改1】引入环境适配器
 from vis.sim_controller import SimulationController
@@ -12,7 +12,7 @@ from vis.sim_controller import SimulationController
 def sampler(sample_num : int = 10, policy_path : str = "models/policies/sac_policy", rb_num : list = [1,0], obs_dense = [30,0.5]):
     model = SAC.load(policy_path, device='cpu')
     for iter in range(sample_num):
-        generate_config(iter, rb_num, obs_dense)
+        generate_agent_config(iter, rb_num, obs_dense)
         env = sim_initialize(iter)
         max_steps = 2000
         config = {

@@ -75,7 +75,7 @@ class RLEnvAdapter(gym.Env):
         """
         注意：此处接收的 raw_actions 必须是单步的 (5,) 向量
         """
-        rou = 15.0 * (raw_actions[0] + 1) + 1.0
+        rou = 7.0 * (raw_actions[0] + 1) + 1.0
         # 【修改点 1】将 0.25 * np.pi 扩大为 0.6 * np.pi，提供更大的横向机动自由度
         phi = 0.25 * np.pi * raw_actions[1]
         e_theta = 0.25 * np.pi * raw_actions[2]

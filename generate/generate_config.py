@@ -191,7 +191,7 @@ def assign_agent_profiles(agent_side: np.ndarray) -> List[str]:
 # ======================
 # 6. 主函数
 # ======================
-def generate_config(i, rb_num : list = [1,0], obs_dense : list = [30,0.5]):
+def generate_agent_config(i, rb_num : list = [1,0], obs_dense : list = [30,0.5]):
     # random.seed(42)
     # === 基础参数 ===
     width, height = 256, 256
@@ -264,5 +264,5 @@ def generate_config(i, rb_num : list = [1,0], obs_dense : list = [30,0.5]):
 
 
 if __name__ == "__main__":
-    num = generate_config(0)
+    num = generate_agent_config(0)
     print(f"智能体数量: {num}")

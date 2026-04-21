@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QApplication
 
 from vis.controlled_window import ControlledVisWindow
 from sim.sim_initialize import sim_initialize
-from generate.generate_config import generate_config
+from generate.generate_config import generate_agent_config
 import sys
 import time
 import os
@@ -15,7 +15,7 @@ import shutil
 
 def make_env(i):
     def _init():
-        generate_config(i)
+        generate_agent_config(i)
         sim = sim_initialize(i)
         return sim
     return _init

@@ -11,7 +11,7 @@ CONFIG = {
     'num_skills': 16,   
     'batch_size': 256,  # 1024     
     'lr': 5e-4,
-    'epochs': 10,
+    'epochs': 100,
     'model_path': 'models/predictors/forward_model.pth',
     'dataset_obs': 'dataset/dynamics_dataset_obs.npy',
     'dataset_skills': 'dataset/dynamics_dataset_skills.npy',

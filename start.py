@@ -1,29 +1,33 @@
 import os
 import numpy as np
+import torch
 
-from generate import generate_agents,generate_config
-from scripts.train_SAC import train_agent, test_and_vis, clean_dir
-from scripts.VQVAE_sample import sampler, data_processer_for_VQVAE, data_processer_for_TwoTower
-from scripts.behavior_clone import train_aligned_bc, inject_to_sac
-from models.policies.finetune_sac import sac_finetune
-from models.predictors.agent_dyn_predictor import train_forward_model,visualize_imagined_trajectories
-from models.vqvae.VQVAE_skill_generate import train_soft_vqvae,visualize_continuous_interpolation
+from generate.generate_agents import *
+from generate.generate_config import *
+from scripts.train_SAC import *
+from scripts.VQVAE_sample import *
+from scripts.behavior_clone import *
+from models.policies.finetune_sac import *
+from models.predictors.agent_dyn_predictor import *
+from models.vqvae.VQVAE_skill_generate import *
 
 def main():
     config = {
-        "rb_num" : [2,0],
-        "obs_dense" : [20,0.5],
+        "rb_num" : [1,0],
+        "obs_dense" : [20,0.9],
         "sac_path_primitive" : "models/policies/sac_policy",
         "sac_path_behavior_clone" : "models/policies/sac_policy_bc",
         "sac_path_finetuned" : "models/policies/sac_policy_finetuned",
         "sac_train_env_nums" : 12,
-        "sac_train_steps" : 100000,
+        "sac_train_steps" : 300000,
         "sac_train_iters" : 1,
         "test_config_id"  : 0,
-        "sample_num" : 10,
+        "sample_num" : 1000,
         "vqvae_slice_len" : 10,
         "predict_horizen" : 10,
+        'device': 'cuda' if torch.cuda.is_available() else 'cpu'
     }
+    device = torch.device(config['device'])
 
     # # 操作流程
     # # 1、 配置智能体参数
@@ -41,24 +45,27 @@ def main():
     # action_data = data_processer_for_VQVAE(config.get("vqvae_slice_len",5))
     # print(f">>> 成功加载动作数据集，形状: {action_data.shape}")
     # vqvae_model = train_soft_vqvae(action_data, config.get("vqvae_slice_len",5))
-    # visualize_continuous_interpolation(vqvae_model, config.get("vqvae_slice_len",5))
+    # # visualize_continuous_interpolation(vqvae_model, config.get("vqvae_slice_len",5))
     # train_aligned_bc()
     # inject_to_sac()
     # sac_finetune(config.get("sac_train_env_nums",12), config.get("sac_train_steps",10000), config.get("sac_path_finetuned","models/policies/sac_policy_finetuned"))
 
     # # 3) 制作正向预测数据集 -> 训练正向预测模型 -> 
-    # obs_data = data_processer_for_TwoTower(config.get("vqvae_slice_len",5), config.get("predict_horizen",5))
-    # forward_model = train_forward_model(config.get("predict_horizen",5))
+    # data_processer_for_TwoTower(config.get("vqvae_slice_len",5), config.get("predict_horizen",5))
+    # train_forward_model(config.get("predict_horizen",5))
+
+    # obs_data = np.load("dataset/dynamics_dataset_obs.npy")
+    # forward_model = ForwardPredictor(horizon=config.get("predict_horizen",5)).to(device)
+    # forward_model.load_state_dict(torch.load("models/predictors/forward_model.pth", map_location=device))
     # visualize_imagined_trajectories(forward_model, obs_data[np.random.randint(0, len(obs_data)):][:1], config.get("predict_horizen",5), config.get("vqvae_slice_len",5))
-    
+    # clean_dir("all")
     # 4) 训练 latent MPC 参数（基于多智能体MPC代价函数）
     
     
-    # # 3、配置用于可视化测试的地图障碍密度、红蓝个体数量
-    generate_config.generate_config(config.get("test_config_id",0), config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]))
+    # 3、配置用于可视化测试的地图障碍密度、红蓝个体数量
+    generate_agent_config(config.get("test_config_id",0), config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]))
     # 测试时开启latent MPC
     test_and_vis(config.get("sac_path_finetuned","models/policies/sac_policy_spirl"))
-
 
 if __name__ == "__main__":
     main()
