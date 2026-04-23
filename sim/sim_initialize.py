@@ -42,12 +42,14 @@ def sim_initialize(i=None):
     agent_dT = config["agents"]["dT"]
     agent_side = np.array(config["agents"]["side"])
     theta = np.array(config["agents"]["theta"])
+    use_latent_mpc = np.array(config["agents"]["use_latent_mpc"])
     agents = []
     for k in range(agent_num):
         agents.append(
             Agent(agent_id[k], pos[k], theta, # theta作为二维初始速度传入agent初始化
             agent_dT[k],
-            agent_side[k]
+            agent_side[k],
+            use_latent_mpc[k]
         ))
         engine.group_ids[int(agent_side[k])].append(agent_id[k])
     

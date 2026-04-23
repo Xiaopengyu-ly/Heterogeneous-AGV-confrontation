@@ -15,6 +15,7 @@ def main():
     config = {
         "rb_num" : [2,0],
         "obs_dense" : [20,0.5],
+        "l_mpc" : True,
         "sac_path_primitive" : "models/policies/sac_policy",
         "sac_path_behavior_clone" : "models/policies/sac_policy_bc",
         "sac_path_finetuned" : "models/policies/sac_policy_finetuned",
@@ -40,7 +41,7 @@ def main():
 
     # # 2) 批量仿真采样 -> 制作VQVAE技能数据集 —> 训练VQVAE技能提取模型 -> 进行VQVAE技能克隆  -> sac微调
     # sampler(config.get("sample_num",10), config.get("sac_path_primitive","models/policies/sac_policy"),
-    #         config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]))
+    #         config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]), config.get("l_mpc", False))
     # clean_dir("configmap")
     # action_data = data_processer_for_VQVAE(config.get("vqvae_slice_len",5))
     # print(f">>> 成功加载动作数据集，形状: {action_data.shape}")
@@ -62,7 +63,7 @@ def main():
     # 4) 训练 latent MPC 参数（基于多智能体MPC代价函数）
     
     # 3、配置用于可视化测试的地图障碍密度、红蓝个体数量
-    generate_agent_config(config.get("test_config_id",0), config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]))
+    generate_agent_config(config.get("test_config_id",0), config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]), config.get("l_mpc", False))
     # 测试时开启latent MPC
     test_and_vis(config.get("sac_path_finetuned","models/policies/sac_policy_spirl"))
 

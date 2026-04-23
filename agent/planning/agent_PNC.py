@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 
 # ==========================================
 # 策略适配器 (Strategy / Adapter Pattern) 
-#
 # ==========================================
 class BasePolicyAdapter(ABC):
     @abstractmethod

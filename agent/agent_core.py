@@ -19,7 +19,7 @@ def normalize_angle(angle):
 
 # 【重大修改】Agent 不再继承任何功能类
 class Agent:
-    def __init__(self, id: int, position: np.ndarray, velocity: np.ndarray, dT: float = 0.02, side=0,):
+    def __init__(self, id: int, position: np.ndarray, velocity: np.ndarray, dT: float = 0.02, side = 0, use_latent_mpc = False):
         # ... (配置加载部分保持不变) ...
         # === 从配置文件加载参数 ===
         config = load_agent_config(config_name = "default")
@@ -123,7 +123,7 @@ class Agent:
         self.rtPlanFlag = False
 
         # 任务阶段标志位
-        self.use_latent_mpc = False
+        self.use_latent_mpc = use_latent_mpc
         self.disabled = False
         self.cannon_launched = False
         self.smoke_mission = True

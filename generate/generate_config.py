@@ -191,7 +191,7 @@ def assign_agent_profiles(agent_side: np.ndarray) -> List[str]:
 # ======================
 # 6. 主函数
 # ======================
-def generate_agent_config(i, rb_num : list = [1,0], obs_dense : list = [30,0.5]):
+def generate_agent_config(i, rb_num : list = [1,0], obs_dense : list = [30,0.5], latent_mpc : bool = False):
     # random.seed(42)
     # === 基础参数 ===
     width, height = 256, 256
@@ -217,6 +217,7 @@ def generate_agent_config(i, rb_num : list = [1,0], obs_dense : list = [30,0.5])
     pos = get_random_positions(d_spl_map, agent_num, side_num['red'], grid_size * width // d_sample_hw[0], min_clearance=2)
     theta = [[2*random.random()-1 for _ in range(2)] for _ in range(agent_num)]
     agent_side = np.array([0] * side_num["red"] + [1] * side_num["blue"])
+    agent_lmpc = [latent_mpc] * agent_num
 
     # === 3. 关系与通信 ===
     com_tensor = build_com_tensor(agent_num, agent_side)
@@ -247,7 +248,8 @@ def generate_agent_config(i, rb_num : list = [1,0], obs_dense : list = [30,0.5])
             "pos": pos.tolist(),
             "side": agent_side.tolist(),
             "com_tensor": com_tensor.tolist(),
-            "profiles": agent_profiles  # ← 新增字段！
+            "profiles": agent_profiles,  
+            "use_latent_mpc" : agent_lmpc
         },
         "target_distance": target_distance,
         "formation_structure": formation_structure
