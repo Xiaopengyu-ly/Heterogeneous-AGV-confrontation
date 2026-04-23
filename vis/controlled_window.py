@@ -3,7 +3,7 @@ from PyQt5.QtCore import Qt, QTimer
 
 from vis.base_vis import VisualizationWindow
 from vis.info_panel import InfoPanelWidget
-from vis.sim_controller import SimulationController
+from sim.sim_controller import SimulationController
 
 class ControlledVisWindow(QMainWindow):
     def __init__(self, simulation, config=None):

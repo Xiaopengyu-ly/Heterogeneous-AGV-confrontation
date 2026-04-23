@@ -52,42 +52,67 @@ class LatentMPCPlanner:
         future_states = current_state_t + deltas
         return future_states
 
-    def _compute_cost(self, future_states):
+    def _compute_cost_and_constraints(self, future_states, current_skill_vec):
         """
-        【模块 3】：MPC 代价函数设计 (Cost Function)
-        基于推演的未来状态，计算每个技能的代价得分
+        【重构版】：严格分离 MPC 的目标函数 (Costs) 与 状态约束 (Constraints)
         """
+        horizon = future_states.size(1)
         ex = future_states[:, :, 36]
         ey = future_states[:, :, 37]
-        
-        # 1. 进度代价：终端距离目标越近越好
-        terminal_dist = torch.sqrt(ex[:, -1]**2 + ey[:, -1]**2) 
-        cost_progress = terminal_dist * 1.0
+        etheta = future_states[:, :, 38]
 
-        # 2. 安全代价：雷达视野低于 0.15 施加硬惩罚 (碰撞风险)
+        # ==========================================
+        # 模块 A：计算软代价 (Soft Costs / Objective Function)
+        # ==========================================
+        # 1. 积分进度代价 (越快靠近目标越好)
+        dist_to_goal = torch.sqrt(ex**2 + ey**2)
+        time_weights = torch.linspace(0.5, 1.5, steps=horizon).to(self.device) 
+        cost_progress = (dist_to_goal * time_weights).mean(dim=1) * 5.0
+        # 2. 航向对齐代价 (鼓励车头对准目标)
+        cost_heading = (torch.abs(etheta) * time_weights).mean(dim=1) * 1.5
+        # 3. 技能平滑代价 (惩罚高频切换，保持宏观动作一致性)
+        curr_s_expanded = current_skill_vec.unsqueeze(0).repeat(self.num_skills, 1)
+        cost_switch = torch.norm(self.skill_vecs - curr_s_expanded, dim=1) * 2.0
+        # 组合纯代价（此时不包含碰撞惩罚）
+        base_cost = cost_progress + cost_heading + cost_switch
+
+        # ==========================================
+        # 模块 B：计算硬约束 (Hard Constraints)
+        # ==========================================
         lidar_preds = torch.clamp(future_states[:, :, :36], 0.0, 1.0)
-        danger_mask = (lidar_preds < 0.15).float()
-        cost_collision = danger_mask.sum(dim=(1, 2)) * 50.0 
-
-        total_cost = cost_progress + cost_collision
-        return total_cost
+        safe_margin = 0.3  # 物理边界约束：雷达测距不得小于 0.15
+        # 计算每条轨迹违背约束的程度 (侵入安全距离的累计量)
+        violation_mask = safe_margin - lidar_preds
+        violation_amount = torch.clamp(violation_mask, min=0.0).sum(dim=(1, 2))
+        # 布尔型可行集标志：违测量为 0 的才是合法的可行解 (Feasible)
+        is_feasible = violation_amount == 0
+        return base_cost, is_feasible, violation_amount
 
     def search_best_skill(self, obs_d):
         """
-        【主入口】：技能寻优
-        串联观测对齐、并行推演与代价评估，返回最佳技能向量
+        【主入口】：带可行集检查与退化保护的寻优
         """
-        # 1. 对齐观测空间
         norm_obs_t = self._align_observation(obs_d)
+        current_skill_vec = torch.FloatTensor(obs_d['semantic']).to(self.device)
         
-        # 2. 获取未来状态预测
         future_states = self._parallel_rollout(norm_obs_t)
         
-        # 3. 计算轨迹代价
-        total_cost = self._compute_cost(future_states)
+        # 拿到代价和约束判定
+        base_cost, is_feasible, violation_amount = self._compute_cost_and_constraints(future_states, current_skill_vec)
         
-        # 4. 选出代价最小的最优技能
-        best_skill_idx = torch.argmin(total_cost).item()
+        # ==========================================
+        # 模块 C：带约束的过滤与决策逻辑
+        # ==========================================
+        if is_feasible.any():
+            # 正常情况：可行集非空 (至少存在一条不撞车的轨迹)
+            # 将违背约束的轨迹代价设为无穷大，直接从候选池剔除
+            valid_costs = torch.where(is_feasible, base_cost, torch.tensor(float('inf')).to(self.device))
+            best_skill_idx = torch.argmin(valid_costs).item()
+        else:
+            # 极端情况：可行集为空 (所有技能在未来 Horizon 内都会触发碰撞约束)
+            # 退化策略 (Constraint Relaxation)：放弃进度寻优，全力最小化约束违背量 (找一条撞得最轻、或者最晚撞的轨迹)
+            best_skill_idx = torch.argmin(violation_amount).item()
+            
         best_skill_vec = self.skill_vecs[best_skill_idx].cpu().numpy()
         
         return best_skill_vec

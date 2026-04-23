@@ -31,8 +31,7 @@ class RLEnvAdapter(gym.Env):
             # 【新增】目标轨迹记忆：感知自身与目标的相对运动趋势
             "history_goal": spaces.Box(low=-np.inf, high=np.inf, shape=(self.history_len * 3,), dtype=np.float32)
         })
-        
-    
+
         self.prev_potential = None
         self.prev_v = None
         self.prev_obs = None
@@ -122,7 +121,7 @@ class RLEnvAdapter(gym.Env):
             "semantic": semantic_obs,
             "prev_actions": np.concatenate(agent.history_action_buffer).astype(np.float32),
             "history_goal": np.concatenate(agent.history_goal_buffer).astype(np.float32)
-        }
+        }     
         
         # ====== 触发高层任务分配 (MPC) ======
         # 利用刚刚对齐的强化学习观测字典进行 Latent MPC 寻优
@@ -132,7 +131,6 @@ class RLEnvAdapter(gym.Env):
             # 将最新的 5 维 skill ID (必须受(0,1)归一化控制) 缓存到 agent 本体
             if best_skill is not None and not isinstance(best_skill, int):
                 agent.current_skill = best_skill
-                
         return obs_dict
 
     def _compute_reward(self, agent, obs, action, terminated_success, terminated_stuck):

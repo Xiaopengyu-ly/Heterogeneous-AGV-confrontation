@@ -6,9 +6,9 @@ import yaml
 
 # 导入你现有的模块
 from sim.sim_initialize import sim_initialize
-from generate_config import generate_config
+from generate.generate_config import generate_agent_config
 from stable_baselines3 import SAC
-from vis.sim_controller import SimulationController
+from sim.sim_controller import SimulationController
 
 def sampler(num_samples=100):
     """
@@ -38,7 +38,7 @@ def sampler(num_samples=100):
         count += 1
         if count == 20:
             config_id = 1
-            generate_config(config_id)
+            generate_agent_config(config_id)
             count = 0
         
         # 3. 配置控制器 (无 GUI 模式)
