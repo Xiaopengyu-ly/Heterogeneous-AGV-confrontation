@@ -112,10 +112,6 @@ class Agent:
         self.grid_map = None
         self.down_sampled_map = None
         self.grid_size = 1
-        # 策略模型
-        # 原代码: self.SACmodel = SAC.load("sac_policy") 
-        # 修改为: 不加载任何旧模型，直接设为 None
-        self.SACmodel = None
         self.dT = dT
         
         # 计数标志位
@@ -125,6 +121,9 @@ class Agent:
         self.rpoint_valid = False
         self.hit_rpoint = False
         self.rtPlanFlag = False
+
+        # 任务阶段标志位
+        self.use_latent_mpc = False
         self.disabled = False
         self.cannon_launched = False
         self.smoke_mission = True

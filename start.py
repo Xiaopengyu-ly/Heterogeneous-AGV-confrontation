@@ -13,7 +13,7 @@ from models.vqvae.VQVAE_skill_generate import *
 
 def main():
     config = {
-        "rb_num" : [10,10],
+        "rb_num" : [2,0],
         "obs_dense" : [20,0.5],
         "sac_path_primitive" : "models/policies/sac_policy",
         "sac_path_behavior_clone" : "models/policies/sac_policy_bc",

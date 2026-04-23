@@ -126,10 +126,9 @@ class RLEnvAdapter(gym.Env):
         
         # ====== 触发高层任务分配 (MPC) ======
         # 利用刚刚对齐的强化学习观测字典进行 Latent MPC 寻优
-        if hasattr(agent, 'behavior_system'):
+        if hasattr(agent, 'behavior_system') and agent.use_latent_mpc == True:
             # MPC 会将寻优结果直接覆写到 obs_dict['semantic']，并返回该 skill
             best_skill = agent.behavior_system.task_allocate_model(obs_dict)
-            
             # 将最新的 5 维 skill ID (必须受(0,1)归一化控制) 缓存到 agent 本体
             if best_skill is not None and not isinstance(best_skill, int):
                 agent.current_skill = best_skill
