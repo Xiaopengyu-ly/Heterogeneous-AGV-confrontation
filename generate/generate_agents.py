@@ -40,7 +40,7 @@ def sample_agent_profile(name: str):
     config["connect_dist"] = int(np.random.uniform(80, 120))       # 整数
     return config
 
-def generate_agent_config(output_path="agent/agent_config.yaml", profiles=None):
+def generate_agent_params(output_path="agent/agent_config.yaml", profiles=None):
     if profiles is None:
         profiles = ["default"]
 
@@ -59,4 +59,4 @@ def generate_agent_config(output_path="agent/agent_config.yaml", profiles=None):
     print(f"✅ Agent config saved to: {output_path}")
 
 if __name__ == "__main__":
-    generate_agent_config(profiles=["default","water","land"])
+    generate_agent_params(profiles=["default","water","land"])

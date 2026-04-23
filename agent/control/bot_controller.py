@@ -79,7 +79,7 @@ def safety_filter(agent, v_ref, w_ref, angle_err):
     - 无邻居时：走显式代数截断（Fast Path），O(1) 极速运算。
     - 有邻居时：走统一 QP 求解（Rigorous Path），保证多体与墙壁的绝对约束。
     """
-    
+    # return v_ref, w_ref, 0, 0 # 验证时可旁路掉安全滤波器
     # ==========================================================
     # 1. 通用前置计算：提取静态特征 (O(1) 复杂度)
     # ==========================================================
@@ -154,66 +154,4 @@ def safety_filter(agent, v_ref, w_ref, angle_err):
         
     # 保证不超机械界限
     w_final = max(-w_limit, min(w_limit, float(w_final)))
-
-    # # ==========================================================
-    # # 2. 判断是否需要启动 QP 求解器，正在考虑把此QP转移到顶层MPC实现
-    # # ==========================================================
-    # has_neighbors = agent.neighbors_id is not [] and len(agent.neighbors_id) > 0
-    
-    # if has_neighbors:
-    #     # ------------------------------------------------------
-    #     # 严谨通道 (Rigorous Path)：遇到邻居，启动联合 QP
-    #     # ------------------------------------------------------
-    #     L_OFFSET = agent.r_point[0]    # 前向偏置距离
-    #     D_SAFE = 3       # 动态避碰的安全距离 必须大于 CBF_DMIN *2
-    #     GAMMA_DYN = 2.0   # 动态避碰 CBF 增益
-        
-    #     u_nom = np.array([v_ref, w_nom])
-    #     def objective(u):
-    #         return 0.5 * ((u[0] - u_nom[0])**2 + (u[1] - u_nom[1])**2)
-            
-    #     constraints = []
-        
-    #     # 硬约束 1: 静态避障要求的最大线速度
-    #     constraints.append({
-    #         'type': 'ineq',
-    #         'fun': static_cbf_constraint,
-    #         'args': (v_static_max,)
-    #     })
-        
-    #     # 硬约束 2: 其他动态智能体的排斥超平面
-    #     theta_i = agent.theta 
-    #     px_i = agent.position[0]+ L_OFFSET * np.cos(theta_i)
-    #     py_i = agent.position[1]+ L_OFFSET * np.sin(theta_i)
-        
-    #     for nbr in agent.neighbors_id:
-    #         theta_j = np.atan2(agent.neighbors_info["velo"][f"{nbr}"][1],agent.neighbors_info["velo"][f"{nbr}"][0])
-    #         px_j = agent.neighbors_info["position"][f"{nbr}"][0] + L_OFFSET * np.cos(theta_j)
-    #         py_j = agent.neighbors_info["position"][f"{nbr}"][1] + L_OFFSET * np.sin(theta_j)
-            
-    #         dx_global = px_i - px_j
-    #         dy_global = py_i - py_j
-            
-    #         D_ij_square = dx_global**2 + dy_global**2
-    #         if D_ij_square < CBF_DIST**2:
-    #             # 转到本车坐标系
-    #             dx_body = dx_global * np.cos(theta_i) + dy_global * np.sin(theta_i)
-    #             dy_body = -dx_global * np.sin(theta_i) + dy_global * np.cos(theta_i)
-
-    #             h_val = D_ij_square - D_SAFE**2
-    #             constraints.append({
-    #                 'type': 'ineq',
-    #                 'fun': dynamic_cbf_constraint,
-    #                 'args': (dx_body, dy_body, h_val, L_OFFSET, GAMMA_DYN)
-    #             })
-                
-    #     bounds = ((0.0, float(agent.v_max)), (-w_limit, w_limit))
-    #     res = minimize(objective, u_nom, method='SLSQP', bounds=bounds, constraints=constraints)
-        
-    #     if res.success:
-    #         v_final, w_final = res.x
-    #     else:
-    #         # 死锁时兜底停车
-    #         v_final, w_final = 0.0, 0.0
-
     return float(v_final), float(w_final), v_final - v_ref, w_final - w_ref

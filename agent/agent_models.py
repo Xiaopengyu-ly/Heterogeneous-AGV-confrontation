@@ -1,7 +1,14 @@
 import numpy as np
 import random
+import torch
+import os
 from agent.control.bot_controller import guidance_with_obstacle_avoidance
 from agent.MapProcess import MapProcesser
+
+# 引入 MPC 相关组件
+from models.vqvae.VQVAE_skill_generate import SoftVQVAE
+from models.predictors.agent_dyn_predictor import ForwardPredictor
+from agent.planning.latent_mpc_search import LatentMPCPlanner
 
 def normalize_angle(angle):
     while angle > np.pi:
@@ -15,10 +22,20 @@ def normalize_angle(angle):
     负责 Model 逻辑 (Move, Sense, Attack)
 '''
 class BehaviorSystem(MapProcesser):
+    # ====================================================
+    # 静态共享变量：确保所有智能体共享一个 MPC 规划器，避免显存/内存溢出
+    # ====================================================
+    _shared_mpc_planner = None
+    _models_loaded = False
     def __init__(self, agent):
         self.agent = agent
         # MapProcesser 可能没有任何初始化，但为了保险调用一下 super
         # super().__init__() 
+        # 从配置中读取是否启用 MPC (默认为 False)
+        self.use_latent_mpc = getattr(self.agent, 'use_latent_mpc', False)
+        # 懒加载：只有在启用了 MPC 且尚未加载模型时才初始化
+        if self.use_latent_mpc and not BehaviorSystem._models_loaded:
+            BehaviorSystem._init_shared_mpc()
 
     # ====================================================
     #  [核心技巧] 属性桥接 (Property Bridging)
@@ -42,6 +59,46 @@ class BehaviorSystem(MapProcesser):
     def local_obstacles(self, value): self.agent.local_obstacles = value
     @property
     def obs_sector(self): return self.agent.obs_sector
+
+    @classmethod
+    def _init_shared_mpc(cls):
+        """初始化共享的 Latent MPC 模型与网络"""
+        print(">>> [BehaviorSystem] 正在初始化全局共享的 Latent MPC 组件 (VQ-VAE + Forward Model)...")
+        device = torch.device('cpu')
+        num_skills = 16
+        horizon = 10
+        POS_LIMIT = 500.0
+        ANG_LIMIT = np.pi
+
+        # 1. 加载 VQ-VAE
+        vq_model = SoftVQVAE(seq_len=10, action_dim=5, latent_dim=4, num_skills=num_skills).to(device)
+        if os.path.exists("vqvae_skills.pth"):
+            vq_model.load_state_dict(torch.load("vqvae_skills.pth", map_location=device))
+        vq_model.eval()
+
+        with torch.no_grad():
+            codebook = vq_model.vq.embedding.weight.data
+            codebook = (codebook + 1.0) / 2.0  # 严格归一化到 (0,1) 范围
+            ids = torch.arange(num_skills).float().to(device).unsqueeze(1) / num_skills
+            skill_vecs = torch.cat([codebook, ids], dim=1) 
+
+        # 2. 加载动力学预测模型
+        forward_model = ForwardPredictor(horizon=horizon).to(device)
+        if os.path.exists("forward_model.pth"):
+            forward_model.load_state_dict(torch.load("forward_model.pth", map_location=device))
+        forward_model.eval()
+        
+        # 3. 实例化 MPC Planner
+        cls._shared_mpc_planner = LatentMPCPlanner(
+            forward_model=forward_model,
+            skill_vecs=skill_vecs,
+            device=device,
+            num_skills=num_skills,
+            pos_limit=POS_LIMIT,
+            ang_limit=ANG_LIMIT
+        )
+        cls._models_loaded = True
+        print(">>> [BehaviorSystem] Latent MPC 共享模块已激活！")
 
     # ====================================================
     #  原 agent_models 逻辑 (self.xxx 替换为 self.agent.xxx)
@@ -79,8 +136,18 @@ class BehaviorSystem(MapProcesser):
         self.agent.v = (v_left + v_right) * self.agent.R / 2
         self.agent.w = (v_right - v_left) * self.agent.R / (2 * self.agent.L)
 
-    def task_allocate_model(self):
-        return 0
+    def task_allocate_model(self, obs_d=None):
+        """
+        高层任务分配与规划模型
+        """
+        # 如果是 agent_core.py 物理层无参调用，或未激活 MPC，直接跳过
+        if not getattr(self.agent, 'use_latent_mpc', False) or self._shared_mpc_planner is None or obs_d is None:
+            return 0 
+        # 只有在 train_sim_core.py 构建完 68 维观测后，才进行潜空间技能搜索
+        best_skill = self._shared_mpc_planner.search_best_skill(obs_d)
+        # 显式占用 5 维语义观测空间，严格执行归一化规则
+        obs_d['semantic'] = best_skill  
+        return best_skill
 
     def smoke_model(self):
         can_smoke = (

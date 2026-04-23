@@ -1,22 +1,66 @@
 default:
-  v_max: 133.09
-  r_turn_min: 22.74
+  v_max: 102.93
+  r_turn_min: 20.19
   s_max: 10000
-  sense_field: 285.05
-  sense_angle_deg: 40.26
-  sense_variance: 0.18
-  attack_range: 185
-  cannon_w_max_deg: 862.76
+  sense_field: 339.44
+  sense_angle_deg: 30.05
+  sense_variance: 0.15
+  attack_range: 165
+  cannon_w_max_deg: 1181.72
+  launch_delay: 9
+  num_per_launch: 1
+  attk_radius: 17.89
+  attk_variance: 0.29
+  cannon_capacity: 10
+  smoke_capacity: 5
+  reflective_surface: 1.12
+  exposed_area: 7.07
+  decision_delay: 2
+  task_preference: 4
+  task_assignment: 1
+  weapon_assignment: 0
+  connect_dist: 110
+water:
+  v_max: 139.96
+  r_turn_min: 20.82
+  s_max: 10000
+  sense_field: 285.82
+  sense_angle_deg: 42.04
+  sense_variance: 0.28
+  attack_range: 161
+  cannon_w_max_deg: 807.56
   launch_delay: 12
   num_per_launch: 1
-  attk_radius: 17.02
-  attk_variance: 0.25
-  cannon_capacity: 8
+  attk_radius: 10.37
+  attk_variance: 0.15
+  cannon_capacity: 11
   smoke_capacity: 5
-  reflective_surface: 1.19
+  reflective_surface: 1.08
   exposed_area: 7.07
-  decision_delay: 3
-  task_preference: 3
-  task_assignment: 0
-  weapon_assignment: 0
-  connect_dist: 91
+  decision_delay: 4
+  task_preference: 1
+  task_assignment: 1
+  weapon_assignment: 1
+  connect_dist: 81
+land:
+  v_max: 123.98
+  r_turn_min: 26.87
+  s_max: 10000
+  sense_field: 288.29
+  sense_angle_deg: 30.37
+  sense_variance: 0.22
+  attack_range: 161
+  cannon_w_max_deg: 962.34
+  launch_delay: 13
+  num_per_launch: 1
+  attk_radius: 10.68
+  attk_variance: 0.16
+  cannon_capacity: 11
+  smoke_capacity: 5
+  reflective_surface: 0.92
+  exposed_area: 7.07
+  decision_delay: 4
+  task_preference: 4
+  task_assignment: 1
+  weapon_assignment: 1
+  connect_dist: 105

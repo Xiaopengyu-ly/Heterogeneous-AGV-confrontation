@@ -112,7 +112,6 @@ class Agent:
         self.grid_map = None
         self.down_sampled_map = None
         self.grid_size = 1
-        
         # 策略模型
         # 原代码: self.SACmodel = SAC.load("sac_policy") 
         # 修改为: 不加载任何旧模型，直接设为 None

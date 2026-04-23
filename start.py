@@ -13,8 +13,8 @@ from models.vqvae.VQVAE_skill_generate import *
 
 def main():
     config = {
-        "rb_num" : [1,0],
-        "obs_dense" : [20,0.9],
+        "rb_num" : [10,10],
+        "obs_dense" : [20,0.5],
         "sac_path_primitive" : "models/policies/sac_policy",
         "sac_path_behavior_clone" : "models/policies/sac_policy_bc",
         "sac_path_finetuned" : "models/policies/sac_policy_finetuned",
@@ -31,7 +31,7 @@ def main():
 
     # # 操作流程
     # # 1、 配置智能体参数
-    # generate_agents.generate_agent_config()
+    # generate_agent_params(profiles=["default","water","land"])
 
     # # 2、 训练强化学习策略，分阶段训练
     # # 1) 训练单体SAC -> 
@@ -60,7 +60,6 @@ def main():
     # visualize_imagined_trajectories(forward_model, obs_data[np.random.randint(0, len(obs_data)):][:1], config.get("predict_horizen",5), config.get("vqvae_slice_len",5))
     # clean_dir("all")
     # 4) 训练 latent MPC 参数（基于多智能体MPC代价函数）
-    
     
     # 3、配置用于可视化测试的地图障碍密度、红蓝个体数量
     generate_agent_config(config.get("test_config_id",0), config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]))

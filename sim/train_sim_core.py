@@ -115,15 +115,26 @@ class RLEnvAdapter(gym.Env):
             agent.history_goal_buffer.append(rel_goal.copy())
             agent.history_goal_buffer.pop(0)
 
-        # ====== 【核心修改 4：组装新的观测字典】 ======
-        return {
+        # ====== 核心修改：组装基础观测字典 ======
+        obs_dict = {
             "rel_goal": rel_goal,
             "lidar": lidar_data,
             "semantic": semantic_obs,
-            # 将二维队列拉平为一维向量
             "prev_actions": np.concatenate(agent.history_action_buffer).astype(np.float32),
             "history_goal": np.concatenate(agent.history_goal_buffer).astype(np.float32)
         }
+        
+        # ====== 触发高层任务分配 (MPC) ======
+        # 利用刚刚对齐的强化学习观测字典进行 Latent MPC 寻优
+        if hasattr(agent, 'behavior_system'):
+            # MPC 会将寻优结果直接覆写到 obs_dict['semantic']，并返回该 skill
+            best_skill = agent.behavior_system.task_allocate_model(obs_dict)
+            
+            # 将最新的 5 维 skill ID (必须受(0,1)归一化控制) 缓存到 agent 本体
+            if best_skill is not None and not isinstance(best_skill, int):
+                agent.current_skill = best_skill
+                
+        return obs_dict
 
     def _compute_reward(self, agent, obs, action, terminated_success, terminated_stuck):
         # === 1. 定义物理边界参数 ===
