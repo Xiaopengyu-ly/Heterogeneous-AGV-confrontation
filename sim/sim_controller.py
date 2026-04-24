@@ -9,11 +9,6 @@ class SimulationController:
         # 兼容处理
         if hasattr(simulation, 'engine'):
             self.engine = simulation.engine
-        elif hasattr(simulation, 'sim'):
-            self.engine = simulation.sim
-        elif hasattr(simulation, 'marl_env'):
-            self.engine = simulation.marl_env.engine
-            self.env = simulation.marl_env
         else:
             self.engine = simulation
         

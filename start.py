@@ -13,7 +13,7 @@ from models.vqvae.VQVAE_skill_generate import *
 
 def main():
     config = {
-        "rb_num" : [3,0],
+        "rb_num" : [1,0],
         "obs_dense" : [20,0.5],
         "l_mpc" : True,
         "sac_path_primitive" : "models/policies/sac_policy",
@@ -23,7 +23,7 @@ def main():
         "sac_train_steps" : 300000,
         "sac_train_iters" : 1,
         "test_config_id"  : 0,
-        "sample_num" : 1000,
+        "sample_num" : 10,
         "vqvae_slice_len" : 10,
         "predict_horizen" : 10,
         'device': 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -39,11 +39,11 @@ def main():
     # # 训练单体SAC时，随机生成的样本，默认"rb_num" = [1,0], "obs_dense" = [30,0.5] (因为SB3仅支持单体训练)
     # train_agent(config.get("sac_train_env_nums",12), config.get("sac_train_steps",10000), config.get("sac_train_iters",1)) 
 
-    # # 2) 批量仿真采样 -> 制作VQVAE技能数据集 —> 训练VQVAE技能提取模型 -> 进行VQVAE技能克隆  -> sac微调
-    # sampler(config.get("sample_num",10), config.get("sac_path_primitive","models/policies/sac_policy"),
-    #         config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]), config.get("l_mpc", False))
-    # clean_dir("configmap")
-    # action_data = data_processer_for_VQVAE(config.get("vqvae_slice_len",5))
+    # 2) 批量仿真采样 -> 制作VQVAE技能数据集 —> 训练VQVAE技能提取模型 -> 进行VQVAE技能克隆  -> sac微调
+    sampler(config.get("sample_num",10), config.get("sac_path_primitive","models/policies/sac_policy"),
+            config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]), config.get("l_mpc", False))
+    clean_dir("configmap")
+    action_data = data_processer_for_VQVAE(config.get("vqvae_slice_len",5))
     # print(f">>> 成功加载动作数据集，形状: {action_data.shape}")
     # vqvae_model = train_soft_vqvae(action_data, config.get("vqvae_slice_len",5))
     # # visualize_continuous_interpolation(vqvae_model, config.get("vqvae_slice_len",5))
@@ -62,10 +62,10 @@ def main():
     # clean_dir("all")
     # 4) 训练 latent MPC 参数（基于多智能体MPC代价函数）
     
-    # 3、配置用于可视化测试的地图障碍密度、红蓝个体数量
-    generate_agent_config(config.get("test_config_id",0), config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]), config.get("l_mpc", False))
-    # 测试时开启latent MPC
-    test_and_vis(config.get("sac_path_finetuned","models/policies/sac_policy_spirl"))
+    # # 3、配置用于可视化测试的地图障碍密度、红蓝个体数量
+    # generate_agent_config(config.get("test_config_id",0), config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]), config.get("l_mpc", False))
+    # # 测试时开启latent MPC
+    # test_and_vis(config.get("sac_path_finetuned","models/policies/sac_policy_spirl"))
 
 if __name__ == "__main__":
     main()

@@ -15,12 +15,6 @@ class VisualizationWindow(QtWidgets.QWidget):
         if hasattr(simulation, 'engine'):
             self.engine = simulation.engine
             self.env_adapter = simulation # 保留 Adapter 引用以便 step
-        elif hasattr(simulation, 'sim'):
-            self.engine = simulation.sim
-            self.env_adapter = simulation
-        elif hasattr(simulation, 'marl_env'):
-            self.engine = simulation.marl_env.engine
-            self.env_adapter = simulation.marl_env
         else:
             self.engine = simulation
             self.env_adapter = None

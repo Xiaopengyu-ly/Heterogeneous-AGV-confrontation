@@ -144,6 +144,7 @@ class BehaviorSystem(MapProcesser):
         if not getattr(self.agent, 'use_latent_mpc', False) or self._shared_mpc_planner is None or obs_d is None:
             return 0 
         # 只有在 train_sim_core.py 构建完 68 维观测后，才进行潜空间技能搜索
+        # skill还包括战斗技能，如释放烟雾、选定跟踪目标等
         best_skill = self._shared_mpc_planner.search_best_skill(obs_d)
         # 显式占用 5 维语义观测空间，严格执行归一化规则
         obs_d['semantic'] = best_skill  

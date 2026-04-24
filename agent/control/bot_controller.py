@@ -42,36 +42,6 @@ def feedback_control(agent, ref_point):
     
     return v_nom, omega_nom, angle_err
 
-# ==========================================================
-# 定义明确的约束函数 (摒弃 lambda 表达式，防止闭包晚期绑定问题)
-# ==========================================================
-def static_cbf_constraint(u, v_max_limit):
-    """
-    静态障碍物 CBF 约束公式: v <= v_max_limit
-    SciPy 格式要求 fun(u) >= 0，因此转换为: v_max_limit - v >= 0
-    u[0] 是线速度 v
-    """
-    return v_max_limit - u[0]
-
-def dynamic_cbf_constraint(u, dx_body, dy_body, h, L_offset, gamma_dyn):
-    """
-    动态多体 CBF 约束公式: L_f h + L_g h * u + gamma * h >= 0
-    展开为: 2 * dx * v + 2 * L_offset * dy * w + gamma_dyn * h >= 0
-    u[0] 是 v, u[1] 是 w
-    """
-    return 2.0 * dx_body * u[0] + 2.0 * L_offset * dy_body * u[1] + gamma_dyn * h
-
-
-import numpy as np
-from scipy.optimize import minimize
-
-def static_cbf_constraint(u, v_max_limit):
-    """静态障碍物线速度上限约束"""
-    return v_max_limit - u[0]
-
-def dynamic_cbf_constraint(u, dx_body, dy_body, h, L_offset, gamma_dyn):
-    """动态邻居前向偏置点 CBF 避碰约束"""
-    return 2.0 * dx_body * u[0] + 2.0 * L_offset * dy_body * u[1] + gamma_dyn * h
 
 def safety_filter(agent, v_ref, w_ref, angle_err):
     """
