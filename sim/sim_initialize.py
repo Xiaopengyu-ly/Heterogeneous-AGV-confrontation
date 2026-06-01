@@ -45,16 +45,18 @@ def sim_initialize(i=None):
     agent_side = np.array(config["agents"]["side"])
     theta = np.array(config["agents"]["theta"])
     p_vectors = config["agents"].get("p_vectors", None)
-    use_latent_mpc = config["agents"].get("use_latent_mpc", False)
+    use_latent_mppi_list = config["agents"].get("use_latent_mppi", [False] * agent_num)
     agents = []
     for k in range(agent_num):
         p_vec = p_vectors[k] if p_vectors else None
+        # YAML list [true]/[false] → per-agent scalar
+        mppi_val = use_latent_mppi_list[k] if isinstance(use_latent_mppi_list, list) else use_latent_mppi_list
         agents.append(
             Agent(agent_id[k], pos[k], theta,
             agent_dT[k],
             agent_side[k],
             p_vector=p_vec,
-            use_latent_mpc=use_latent_mpc,
+            use_latent_mppi=mppi_val,
         ))
         engine.group_ids[int(agent_side[k])].append(agent_id[k])
     

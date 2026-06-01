@@ -19,7 +19,7 @@ def normalize_angle(angle):
 
 # 【重大修改】Agent 不再继承任何功能类
 class Agent:
-    def __init__(self, id: int, position: np.ndarray, velocity: np.ndarray, dT: float = 0.02, side = 0, p_vector = None, use_latent_mpc: bool = False):
+    def __init__(self, id: int, position: np.ndarray, velocity: np.ndarray, dT: float = 0.02, side = 0, p_vector = None, use_latent_mppi: bool = False):
         # === 加载装备参数：优先使用传入的 P 向量，否则回退到默认配置 ===
         if p_vector is not None:
             config = self._p_vector_to_config(p_vector)
@@ -28,7 +28,7 @@ class Agent:
 
         # 任务参数
         self.TARGET_POS = np.array([0.0, 0.0])
-        self.use_latent_mpc = use_latent_mpc
+        self.use_latent_mppi = use_latent_mppi
 
         # 装备性能指标
         self.v_max = config["v_max"] 

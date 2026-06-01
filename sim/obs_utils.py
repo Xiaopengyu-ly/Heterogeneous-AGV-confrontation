@@ -6,6 +6,7 @@ from collections import deque
 N_SECTORS = 36
 SECTOR_ANGLE = 2 * np.pi / N_SECTORS  # rad per sector
 LIDAR_MAX_RANGE = 100.0
+HISTORY_LEN = 3  # 2 past frames + 1 current frame
 
 
 def goal_to_lidar_mask(rou, etheta, sigma=None):
@@ -109,49 +110,142 @@ def build_lidar_2d(raw_lidar, n_sectors=36, n_bins=5, max_range=100.0, pe_weight
     return lidar_2d
 
 
-def build_goal_obs(agent, history_len, vae_model):
+# ============================================================
+#  新统一帧格式: 每帧 = 36 sector × (5 lidar bins + 1 goal feature)
+# ============================================================
+
+def build_unified_frame(lidar_2d, goal_mask):
     """
-    Build goal_dir and history_goal.
+    Build a single unified frame: combine lidar bins + goal mask per sector.
 
-    Returns (goal_dir, history_goal):
-      - goal_dir: (2,) [rou/200, etheta/pi], direct polar signal for steering + speed
-      - history_goal: ((history_len-1)*36,) past masks + PE + VAE + goal_encoding
+    lidar_2d: (5, 36)  — 5 bins × 36 sectors, from build_lidar_2d()
+    goal_mask: (36,)   — goal_to_lidar_mask() output
 
-    Also updates agent.goal_history and agent.action_history buffers in-place.
+    Returns: (36, 6)   — 36 sector tokens, each with [bin0..bin4 | goal]
+    """
+    lidar_T = lidar_2d.T  # (36, 5)
+    goal = goal_mask[:, None]  # (36, 1)
+    return np.concatenate([lidar_T, goal], axis=1).astype(np.float32)  # (36, 6)
+
+
+def build_multi_frame_obs(goal_history, lidar_history, current_lidar_2d, current_goal_mask):
+    """
+    Build multi-frame observation from history buffers + current frame.
+
+    goal_history:  list of (36,) goal masks for past frames (length = HISTORY_LEN-1)
+    lidar_history: list of (5, 36) lidar_2d for past frames (length = HISTORY_LEN-1)
+    current_lidar_2d: (5, 36)
+    current_goal_mask: (36,)
+
+    Returns: (HISTORY_LEN, 36, 6)  — N_frames × 36 sectors × 6 features
+    """
+    frames = []
+    for i in range(HISTORY_LEN - 1):
+        frames.append(build_unified_frame(lidar_history[i], goal_history[i]))
+    frames.append(build_unified_frame(current_lidar_2d, current_goal_mask))
+    return np.stack(frames, axis=0)  # (N_frames, 36, 6)
+
+
+def init_agent_buffers(agent):
+    """Initialize goal_history and lidar_history buffers on the agent."""
+    empty_goal = np.zeros(N_SECTORS, dtype=np.float32)
+    empty_lidar = np.zeros((5, N_SECTORS), dtype=np.float32)
+    if not hasattr(agent, 'goal_history'):
+        agent.goal_history = deque(
+            [empty_goal.copy() for _ in range(HISTORY_LEN)],
+            maxlen=HISTORY_LEN
+        )
+    if not hasattr(agent, 'lidar_history'):
+        agent.lidar_history = deque(
+            [empty_lidar.copy() for _ in range(HISTORY_LEN)],
+            maxlen=HISTORY_LEN
+        )
+
+
+def update_agent_buffers(agent, goal_mask, lidar_2d):
+    """Push new frame into agent buffers (sliding window)."""
+    if not hasattr(agent, 'goal_history') or not hasattr(agent, 'lidar_history'):
+        init_agent_buffers(agent)
+    agent.goal_history.append(goal_mask.copy())
+    agent.lidar_history.append(lidar_2d.copy())
+
+
+def build_goal_obs(agent):
+    """
+    Build goal_dir and unified multi-frame observation (new format).
+
+    Returns:
+      goal_dir: (2,) [rou/200, etheta/pi]
+      obs_frames: (HISTORY_LEN, 36, 6) — multi-frame unified observation
+      cur_goal_mask: (36,) for buffer update
+      cur_lidar_2d: (5, 36) for buffer update
     """
     dx = agent.p_pos[0] - agent.position[0]
     dy = agent.p_pos[1] - agent.position[1]
     rou = np.hypot(dx, dy)
     target_angle = np.arctan2(dy, dx)
     etheta = _angle_diff(agent.theta, target_angle)
-    goal_encoding = goal_to_lidar_mask(rou, etheta)
+
+    cur_goal_mask = goal_to_lidar_mask(rou, etheta)
     goal_dir = np.array([rou / 200.0, etheta / np.pi], dtype=np.float32)
 
-    if not hasattr(agent, 'goal_history'):
-        agent.goal_history = deque(
-            [goal_encoding.copy() for _ in range(history_len)],
-            maxlen=history_len
-        )
-    if not hasattr(agent, 'action_history'):
-        agent.action_history = deque(
-            [np.zeros(5, dtype=np.float32) for _ in range(history_len - 1)],
-            maxlen=history_len - 1
-        )
+    # Build current lidar_2d from raw sensor data
+    raw_lidar = np.array(agent.obs_sector, dtype=np.float32)
+    cur_lidar_2d = build_lidar_2d(raw_lidar)
+
+    # Initialize buffers if needed
+    init_agent_buffers(agent)
+
+    # Build multi-frame observation from history
+    past_goals = [agent.goal_history[i] for i in range(HISTORY_LEN - 1)]
+    past_lidars = [agent.lidar_history[i] for i in range(HISTORY_LEN - 1)]
+    obs_frames = build_multi_frame_obs(past_goals, past_lidars, cur_lidar_2d, cur_goal_mask)
+
+    return goal_dir, obs_frames, cur_goal_mask, cur_lidar_2d
+
+
+def build_sac_obs(agent):
+    """
+    Build SAC-compatible observation dict (legacy 4-key format, without ActionVAE).
+
+    Returns:
+      lidar_2d:     (5, 36)   — from build_lidar_2d()
+      goal_dir:     (2,)      — [rou/200, etheta/pi]
+      history_goal: (72,)     — (history_len-1) × 36, without ActionVAE
+      dynamics:     (2,)      — hardware params
+    """
+    dx = agent.p_pos[0] - agent.position[0]
+    dy = agent.p_pos[1] - agent.position[1]
+    rou = np.hypot(dx, dy)
+    target_angle = np.arctan2(dy, dx)
+    etheta = _angle_diff(agent.theta, target_angle)
+
+    cur_goal_mask = goal_to_lidar_mask(rou, etheta)
+    goal_dir = np.array([rou / 200.0, etheta / np.pi], dtype=np.float32)
+
+    # Build lidar_2d from raw sensor
+    raw_lidar = np.array(agent.obs_sector, dtype=np.float32)
+    lidar_2d = build_lidar_2d(raw_lidar)
+
+    # Build history_goal WITHOUT ActionVAE embeddings
+    init_agent_buffers(agent)
 
     history_parts = []
-    for i in range(history_len - 1):
+    for i in range(HISTORY_LEN - 1):
         past_goal = agent.goal_history[i]
         combined = past_goal + get_positional_encoding(i)
-        past_action = agent.action_history[i]
-        action_tensor = torch.from_numpy(past_action).float().unsqueeze(0)
-        vae_embed = vae_model.get_embedding(action_tensor).squeeze(0).numpy()
-        history_parts.append(np.clip(combined + vae_embed + goal_encoding, 0.0, 1.0))
+        # No ActionVAE embed — just past_goal + PE + cur_goal
+        history_parts.append(np.clip(combined + cur_goal_mask, 0.0, 1.0))
 
     history_goal = np.concatenate(history_parts).astype(np.float32)
 
-    agent.goal_history.append(goal_encoding.copy())
+    # Update goal_history buffer
+    agent.goal_history.append(cur_goal_mask.copy())
 
-    return goal_dir, history_goal
+    # dynamics
+    dynamics = np.array([agent.v_max / 140.0, agent.r_turn_min / 30.0], dtype=np.float32)
+
+    return lidar_2d, goal_dir, history_goal, dynamics
 
 
 def _angle_diff(a, b):

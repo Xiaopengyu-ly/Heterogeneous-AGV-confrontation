@@ -103,63 +103,39 @@ class ReplayBuffer:
         return final_data
 
 
-    def extract_dynamics_dataset(self, vq_model, Horizen_len: int,
-                                   filepath: str = "sim/sim_replay/0.pkl", seq_len: int = 10):
+    def extract_dynamics_dataset(self, horizon_len: int,
+                                   filepath: str = "sim/sim_replay/0.pkl", n_frames: int = 3):
         """
-        提取 Forward Model 训练数据集。
+        提取 Forward Model 训练数据集 (新 MPPI 格式，无需 VQ-VAE)。
 
-        输入: 单帧 obs[t] (256-dim) + skill (5-dim, 编码 actions[t:t+T])
-        目标: T 帧增量 [lidar_dist(36) + goal_dir(2)]，对应 [t+1, ..., t+T]
-        要求: seq_len == Horizen_len (动作编码长度 = 预测视界)
+        输入: 多帧观测 obs (N_frames, 36, 6) + dynamics(2) + action 序列 (T, 5)
+        目标: T 帧增量 [(36, 6)] — 统一帧的逐帧变化，对应 [t+1, ..., t+T]
         """
-        import torch
-        import pickle
         import numpy as np
+        import pickle
 
-        assert seq_len == Horizen_len, \
-            f"seq_len({seq_len}) must equal Horizen_len({Horizen_len})"
+        T = horizon_len
 
-        vq_model.eval()
-        device = next(vq_model.parameters()).device
-        SKILL_NUM = 16
-        MAX_LIDAR_RANGE = 100.0
-        T = seq_len  # 统一符号
-
-        def normalize_obs_dict(obs_d):
-            """底层 SAC 4-key Dict → 256 维扁平"""
-            lidar_2d     = np.array(obs_d['lidar_2d'], dtype=np.float32).flatten()
-            goal_dir     = np.array(obs_d['goal_dir'], dtype=np.float32)
-            history_goal = np.array(obs_d['history_goal'], dtype=np.float32)
-            dynamics     = np.array(obs_d['dynamics'], dtype=np.float32)
-            return np.concatenate([lidar_2d, goal_dir, history_goal, dynamics])
-
-        def lidar2d_to_distances(lidar_2d):
-            n_bins, n_sectors = lidar_2d.shape
-            bin_size = MAX_LIDAR_RANGE / n_bins
-            distances = np.full(n_sectors, MAX_LIDAR_RANGE, dtype=np.float32)
-            for s in range(n_sectors):
-                for b in range(n_bins):
-                    if lidar_2d[b, s] > 0.5:
-                        distances[s] = b * bin_size
-                        break
-            return distances
-
-        def extract_forward_target(obs_dict):
-            """提取 Forward Model 预测目标: lidar_dist(36) + goal_dir(2) = 38 维"""
-            lidar_2d = np.array(obs_dict['lidar_2d'], dtype=np.float32)
-            lidar_dist = lidar2d_to_distances(lidar_2d) / MAX_LIDAR_RANGE
-            goal_dir = np.array(obs_dict['goal_dir'], dtype=np.float32)
-            return np.concatenate([lidar_dist, goal_dir])
+        def build_unified_frame_from_obs(obs_dict):
+            """从 obs dict 构建统一帧 (36, 6)"""
+            from sim.obs_utils import build_unified_frame, goal_to_lidar_mask
+            lidar_2d = np.array(obs_dict['lidar_2d'], dtype=np.float32)   # (5, 36)
+            goal_dir = np.array(obs_dict['goal_dir'], dtype=np.float32)   # (2,)
+            rou = goal_dir[0] * 200.0         # 反归一化
+            etheta = goal_dir[1] * np.pi      # 反归一化
+            goal_mask = goal_to_lidar_mask(rou, etheta)  # (36,)
+            return build_unified_frame(lidar_2d, goal_mask)  # (36, 6)
 
         with open(filepath, 'rb') as f:
             buffer_list = pickle.load(f)
 
-        dataset_obs = []        # 单帧观测
-        dataset_skills = []     # VQ-VAE skill 编码
-        dataset_deltas = []     # T 帧增量目标
+        dataset_obs = []        # (N, n_frames, 36, 6)
+        dataset_dynamics = []   # (N, 2)
+        dataset_actions = []    # (N, T, 5)  原生 action 序列
+        dataset_deltas = []     # (N, T, 36, 6)  统一帧增量
         agent_caches = {}
 
-        print(f">>> 解析 Forward Model 数据: {filepath} (T={T})")
+        print(f">>> 解析 Forward Model 数据 (MPPI 格式): {filepath} (T={T})")
         for transition in buffer_list:
             state, obs, action_data, reward, next_state, next_obs, done = transition
             if done:
@@ -185,50 +161,51 @@ class ReplayBuffer:
                 agent_caches[agent_id]['obs'].append(obs_dict[agent_id])
                 agent_caches[agent_id]['actions'].append(action_vec[:5])
 
-                # 需要 T 个动作 (编码 skill) + T+1 帧观测 (obs[0] 输入, obs[1:T+1] 计算 delta)
-                if len(agent_caches[agent_id]['actions']) >= T + 1:
-                    # --- A. VQ-VAE 编码 actions[0:T] → skill ---
-                    act_seq = np.array(agent_caches[agent_id]['actions'][:T], dtype=np.float32)
-                    act_tensor = torch.from_numpy(act_seq).unsqueeze(0).to(device)
+                # 需要 T+1 帧观测 (obs[0:T] for n_frames construction, obs[1:T+1] for delta)
+                needed = max(T + 1, n_frames)
+                if len(agent_caches[agent_id]['actions']) >= needed:
+                    # --- A. 构建多帧观测 ---
+                    obs_seq = agent_caches[agent_id]['obs'][:n_frames]
+                    frames = [build_unified_frame_from_obs(o) for o in obs_seq]
+                    obs_input = np.stack(frames, axis=0)  # (n_frames, 36, 6)
 
-                    with torch.no_grad():
-                        z = vq_model.enc(act_tensor.view(1, -1))
-                        _, _, indices = vq_model(act_tensor)
-                        skill_id = indices.item()
+                    # --- B. Dynamics ---
+                    dyn = np.array(obs_seq[-1]['dynamics'], dtype=np.float32)  # (2,)
 
-                    skill_vec = np.zeros(5, dtype=np.float32)
-                    skill_vec[:4] = (z.cpu().numpy().flatten() + 1.0) / 2.0  # latent [0,1]
-                    skill_vec[4] = skill_id / SKILL_NUM                        # norm ID
+                    # --- C. 原生 action 序列 ---
+                    action_seq = np.array(
+                        agent_caches[agent_id]['actions'][:T], dtype=np.float32
+                    )  # (T, 5)
 
-                    # --- B. 单帧观测输入 obs[0] ---
-                    state_input = normalize_obs_dict(agent_caches[agent_id]['obs'][0])
-
-                    # --- C. T 帧增量目标 [obs[t+1]-obs[t], ..., obs[t+T]-obs[t+T-1]] ---
+                    # --- D. T 帧增量: 统一帧 (36,6) 的逐帧变化 ---
                     deltas = []
-                    prev = extract_forward_target(agent_caches[agent_id]['obs'][0])
+                    prev_frame = build_unified_frame_from_obs(obs_seq[0])
                     for i in range(1, T + 1):
-                        curr = extract_forward_target(agent_caches[agent_id]['obs'][i])
-                        deltas.append(curr - prev)
-                        prev = curr
+                        curr_frame = build_unified_frame_from_obs(
+                            agent_caches[agent_id]['obs'][i])
+                        deltas.append(curr_frame - prev_frame)
+                        prev_frame = curr_frame
 
-                    dataset_obs.append(state_input)
-                    dataset_skills.append(skill_vec)
+                    dataset_obs.append(obs_input)
+                    dataset_dynamics.append(dyn)
+                    dataset_actions.append(action_seq)
                     dataset_deltas.append(np.array(deltas, dtype=np.float32))
 
-                    # --- D. 滑动 ---
+                    # --- E. 滑动 ---
                     agent_caches[agent_id]['obs'].pop(0)
                     agent_caches[agent_id]['actions'].pop(0)
 
         if len(dataset_obs) == 0:
             return None
 
-        final_obs = np.array(dataset_obs, dtype=np.float32)       # (N, 256)
-        final_skills = np.array(dataset_skills, dtype=np.float32)  # (N, 5)
-        final_deltas = np.array(dataset_deltas, dtype=np.float32)  # (N, T, 38)
+        final_obs = np.array(dataset_obs, dtype=np.float32)       # (N, n_frames, 36, 6)
+        final_dynamics = np.array(dataset_dynamics, dtype=np.float32)  # (N, 2)
+        final_actions = np.array(dataset_actions, dtype=np.float32)    # (N, T, 5)
+        final_deltas = np.array(dataset_deltas, dtype=np.float32)      # (N, T, 36, 6)
 
-        print(f">>> 提取完成: Obs {final_obs.shape}, Skill {final_skills.shape}, "
-              f"Deltas {final_deltas.shape}")
-        return final_obs, final_skills, final_deltas
+        print(f">>> 提取完成: Obs {final_obs.shape}, Actions {final_actions.shape}, "
+              f"Dynamics {final_dynamics.shape}, Deltas {final_deltas.shape}")
+        return final_obs, final_dynamics, final_actions, final_deltas
 
 
 def lidar2d_to_distances(lidar_2d, max_range=100.0):

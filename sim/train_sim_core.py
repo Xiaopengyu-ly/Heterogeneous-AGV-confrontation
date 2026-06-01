@@ -9,8 +9,7 @@ import torch
 import torch.nn as nn
 import os
 
-from sim.obs_utils import build_goal_obs, build_lidar_2d
-from models.vae.action_vae import ActionVAE
+from sim.obs_utils import build_sac_obs
 
 
 # =====================================================================
@@ -75,16 +74,7 @@ class RLEnvAdapter(gym.Env):
             "dynamics": spaces.Box(low=-np.inf, high=np.inf, shape=(2,), dtype=np.float32)
         })
 
-        # 加载预训练 VAE（用于 history_goal 中的动作嵌入）
-        vae_path = os.path.join(os.path.dirname(__file__), "../models/vae/action_vae_pretrained.pt")
-        self.vae = ActionVAE()
-        if os.path.exists(vae_path):
-            ckpt = torch.load(vae_path, map_location='cpu')
-            self.vae.load_state_dict(ckpt['model_state_dict'])
-            self.vae.eval()
-        else:
-            print(f"[WARN] VAE checkpoint not found at {vae_path}, using untrained VAE")
-            self.vae.eval()
+        # ActionVAE 已移除 — history_goal 不再包含 VAE 嵌入
 
         self.prev_potential = None
         self.prev_v = None
@@ -149,12 +139,8 @@ class RLEnvAdapter(gym.Env):
         if obs_sector is None:
             obs_sector = np.ones(36, dtype=np.float32) * 100.0
 
-        # 2D lidar: (5, 36)
-        lidar_2d = build_lidar_2d(np.asarray(obs_sector, dtype=np.float32))
-
-        goal_dir, history_goal = build_goal_obs(agent, self.history_len, self.vae)
-
-        dynamics = np.array([agent.v_max / 140.0, agent.r_turn_min / 30.0], dtype=np.float32)
+        # Use new SAC-compatible observation builder (no ActionVAE)
+        lidar_2d, goal_dir, history_goal, dynamics = build_sac_obs(agent)
 
         obs_dict = {
             "lidar_2d": lidar_2d,

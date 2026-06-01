@@ -171,14 +171,14 @@ class SimulationController:
                     if smoke_flag == 1 and agent.smoke_remain > 0:
                         agent.smoke_mission = True
 
-            # 统一推理 + 物理步进 (MPC 或 SAC)
+            # 统一推理 + 物理步进 (MPPI 或 SAC)
             action_dict = {}
             for agent in self.engine.agents:
                 if agent.disabled:
                     continue
                 obs = self.env.get_agent_observation(agent)
-                if getattr(agent, 'use_latent_mpc', False):
-                    _, ll_action = agent.behavior_system.get_mpc_action(obs)
+                if getattr(agent, 'use_latent_mppi', False):
+                    ll_action = agent.behavior_system.get_mppi_action(obs)
                 elif self.lower_actor is not None:
                     ll_action, _ = self.lower_actor.predict(obs, deterministic=True)
                 else:
@@ -215,14 +215,14 @@ class SimulationController:
                 return False
             return True
 
-        # ---- 单层推理模式 (MPC 或 SAC) ----
+        # ---- 单层推理模式 (MPPI 或 SAC) ----
         action_dict = {}
         for agent in self.engine.agents:
             if agent.disabled:
                 continue
             obs = self.env.get_agent_observation(agent)
-            if getattr(agent, 'use_latent_mpc', False):
-                _, ll_action = agent.behavior_system.get_mpc_action(obs)
+            if getattr(agent, 'use_latent_mppi', False):
+                ll_action = agent.behavior_system.get_mppi_action(obs)
             elif self.lower_actor is not None:
                 ll_action, _ = self.lower_actor.predict(obs, deterministic=True)
             else:
