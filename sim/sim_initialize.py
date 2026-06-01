@@ -1,7 +1,7 @@
 # sim/sim_initialize.py
 import numpy as np
 import yaml
-
+import os
 from generate.generate_map import MapGenerator
 from agent.agent_core import Agent
 from comm.msg_pool import MsgPool
@@ -10,10 +10,12 @@ from sim.train_sim_core import RLEnvAdapter
 
 def sim_initialize(i=None):
     # 默认读取 config.yaml，但也支持传入具体路径或编号
-    with open("./version.yaml", "r") as f:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    yaml_path = os.path.join(BASE_DIR, "version.yaml")
+    with open(yaml_path, "r") as f:
         version_config = yaml.safe_load(f)
     version = version_config["version"]["id"]
-    config_path = f"E:/code/v3/version{version}/sim/config_data/config{i}.yaml" if isinstance(i, int) else i
+    config_path = f"E:/code/v{int(version)}/version{version}/sim/config_data/config{i}.yaml" if isinstance(i, int) else i
 
         
     with open(config_path, "r") as f:
@@ -42,14 +44,17 @@ def sim_initialize(i=None):
     agent_dT = config["agents"]["dT"]
     agent_side = np.array(config["agents"]["side"])
     theta = np.array(config["agents"]["theta"])
-    use_latent_mpc = np.array(config["agents"]["use_latent_mpc"])
+    p_vectors = config["agents"].get("p_vectors", None)
+    use_latent_mpc = config["agents"].get("use_latent_mpc", False)
     agents = []
     for k in range(agent_num):
+        p_vec = p_vectors[k] if p_vectors else None
         agents.append(
-            Agent(agent_id[k], pos[k], theta, # theta作为二维初始速度传入agent初始化
+            Agent(agent_id[k], pos[k], theta,
             agent_dT[k],
             agent_side[k],
-            use_latent_mpc[k]
+            p_vector=p_vec,
+            use_latent_mpc=use_latent_mpc,
         ))
         engine.group_ids[int(agent_side[k])].append(agent_id[k])
     

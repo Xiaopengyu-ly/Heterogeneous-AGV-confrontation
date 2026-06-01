@@ -198,3 +198,69 @@ class MapProcesser:
                 for _, pt in closest
             ]
             return self.local_obstacles
+
+
+# ==========================================
+# 在 agent/MapProcess.py 文件末尾新增以下类
+# ==========================================
+class GlobalNavField:
+    def __init__(self):
+        self.grid_map = None
+        self.nav_grid_size = 1.0
+        self.nav_field = None
+        self.target_grid = None
+        self.height = 0
+        self.width = 0
+
+    def update_map(self, d_spl_map, nav_grid_size):
+        """初始化或更新降采样地图"""
+        if self.grid_map is None or self.grid_map.shape != d_spl_map.shape:
+            self.grid_map = d_spl_map
+            self.height, self.width = self.grid_map.shape
+            self.nav_field = np.full((self.height, self.width), np.inf)
+            self.nav_grid_size = nav_grid_size
+
+    def update_target(self, target_pos_world, world_offset):
+        """当物理目标发生变化时，更新波前距离场"""
+        if self.grid_map is None:
+            return
+            
+        # 世界坐标 -> 降采样网格坐标
+        tx = int((target_pos_world[0] + world_offset[0]) / self.nav_grid_size)
+        ty = int((target_pos_world[1] + world_offset[1]) / self.nav_grid_size)
+        
+        tx = np.clip(tx, 0, self.width - 1)
+        ty = np.clip(ty, 0, self.height - 1)
+        
+        # 目标没变，不需要重复跑最短路径
+        if self.target_grid == (tx, ty):
+            return
+            
+        self.target_grid = (tx, ty)
+        self._compute_dijkstra_field()
+
+    def _compute_dijkstra_field(self):
+        self.nav_field.fill(np.inf)
+        tx, ty = self.target_grid
+        
+        # 目标若在降采样障碍物内，暂不处理（或可寻找最近非障碍点）
+        if self.grid_map[ty, tx] == 1:
+            return 
+            
+        queue = deque([(tx, ty)])
+        self.nav_field[ty, tx] = 0.0
+        directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
+        costs = [1.0, 1.0, 1.0, 1.0, 1.414, 1.414, 1.414, 1.414]
+
+        # BFS 扩散
+        while queue:
+            cx, cy = queue.popleft()
+            current_dist = self.nav_field[cy, cx]
+
+            for (dx, dy), cost in zip(directions, costs):
+                nx, ny = cx + dx, cy + dy
+                if 0 <= nx < self.width and 0 <= ny < self.height:
+                    if self.grid_map[ny, nx] == 0:
+                        if current_dist + cost < self.nav_field[ny, nx]:
+                            self.nav_field[ny, nx] = current_dist + cost
+                            queue.append((nx, ny))

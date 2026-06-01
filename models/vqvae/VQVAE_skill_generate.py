@@ -9,8 +9,8 @@ import os
 
 # ================= 0. 配置 =================
 CONFIG = {
-    # 'T': 10,                # 必须与提取器中的 slice_len / Action Chunking Horizon 对齐
-    'action_dim': 5,       # 动作维度
+    'seq_len': 10,         # 技能长度，与底层 SAC 的 action chunking 对齐
+    'action_dim': 5,       # 动作维度 (e_x, e_y, e_theta, v_r, w_r)
     'latent_dim': 4,       # 4维隐空间
     'num_skills': 16,      # 16个基础技能
     'batch_size': 1024,
@@ -95,16 +95,18 @@ class SoftVQVAE(nn.Module):
         return recon, ortho_loss, indices
 
 # ================= 2. 改进后的训练函数 =================
-def train_soft_vqvae(raw_data,seq_len : int = 5):
+def train_soft_vqvae(raw_data, seq_len : int = None):
+    if seq_len is None:
+        seq_len = CONFIG['seq_len']
     data_tensor = torch.FloatTensor(raw_data).to(device)
     train_size = int(0.8 * len(data_tensor))
     train_db, val_db = random_split(TensorDataset(data_tensor), [train_size, len(data_tensor)-train_size])
-    
+
     train_loader = DataLoader(train_db, batch_size=CONFIG['batch_size'], shuffle=True)
     val_loader = DataLoader(val_db, batch_size=CONFIG['batch_size'])
-    
-    # 【核心修改 2】实例化时严格传入 seq_len
-    model = SoftVQVAE(seq_len , action_dim=CONFIG['action_dim'], 
+
+    # 实例化时严格传入 seq_len
+    model = SoftVQVAE(seq_len=seq_len, action_dim=CONFIG['action_dim'],
                       latent_dim=CONFIG['latent_dim'], num_skills=CONFIG['num_skills']).to(device)
                       
     optimizer = optim.Adam(model.parameters(), lr=CONFIG['lr'])
@@ -139,7 +141,9 @@ def train_soft_vqvae(raw_data,seq_len : int = 5):
     return model
 
 # ================= 3. 改进后的可视化 =================
-def visualize_continuous_interpolation(model, seq_len : int = 5):
+def visualize_continuous_interpolation(model, seq_len : int = None):
+    if seq_len is None:
+        seq_len = CONFIG['seq_len']
     """
     可视化连续性：展示从 Skill A 平滑过渡到 Skill B 的过程
     """

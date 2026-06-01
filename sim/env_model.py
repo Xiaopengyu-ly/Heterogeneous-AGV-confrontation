@@ -172,6 +172,8 @@ class env_model:
             # ==========================================
             all_obs_x = np.concatenate([static_obs_x, dynamic_obs_x])
             all_obs_y = np.concatenate([static_obs_y, dynamic_obs_y])
+            # all_obs_x = static_obs_x
+            # all_obs_y = static_obs_y
 
             if len(all_obs_x) == 0:
                 # 没有任何障碍物（静态或动态）

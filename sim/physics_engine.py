@@ -139,8 +139,6 @@ class PhysicsEngine(env_model):
                 action = controllers[agent.id]
                 case = "RL_Actor" 
                 agent.get_route_point(case, action)
-            else:
-                agent.get_route_point("A_star", np.array([0,0,0,0,0]))
             agent.update() 
         self.steps += 1
 

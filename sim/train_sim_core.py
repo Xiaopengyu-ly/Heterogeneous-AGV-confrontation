@@ -4,7 +4,54 @@ import gymnasium as gym
 from gymnasium import spaces
 from sim.physics_engine import PhysicsEngine
 from stable_baselines3 import SAC, PPO
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 import torch
+import torch.nn as nn
+import os
+
+from sim.obs_utils import build_goal_obs, build_lidar_2d
+from models.vae.action_vae import ActionVAE
+
+
+# =====================================================================
+# 统一特征提取器 — Conv1d 处理 lidar_2d + MLP 处理低维观测
+# =====================================================================
+class UnifiedFeatureExtractor(BaseFeaturesExtractor):
+    def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 128):
+        super().__init__(observation_space, features_dim)
+
+        # lidar_2d: (5, 36) — 5 距离 bin 通道, 36 扇区
+        self.lidar_tower = nn.Sequential(
+            nn.Conv1d(5, 16, kernel_size=5, stride=2, padding=2), nn.ReLU(),  # → (16, 18)
+            nn.Conv1d(16, 32, kernel_size=3, stride=2, padding=1), nn.ReLU(),  # → (32, 9)
+            nn.Flatten(),                                                        # 288
+            nn.Linear(288, 32), nn.ReLU(),
+        )
+
+        # goal_dir: (2,)
+        self.goal_tower = nn.Sequential(nn.Linear(2, 8), nn.ReLU())
+
+        # history_goal: ((history_len-1)*36,) = (72,)
+        self.history_tower = nn.Sequential(
+            nn.Linear(72, 32), nn.ReLU(),
+            nn.Linear(32, 16), nn.ReLU(),
+        )
+
+        # dynamics: (2,)
+        self.dynamics_tower = nn.Sequential(nn.Linear(2, 8), nn.ReLU())
+
+        # 融合: 32 + 8 + 16 + 8 = 64
+        self.fusion = nn.Sequential(
+            nn.Linear(64, features_dim), nn.ReLU(),
+        )
+
+    def forward(self, observations):
+        f_lidar = self.lidar_tower(observations['lidar_2d'])
+        f_goal = self.goal_tower(observations['goal_dir'])
+        f_hist = self.history_tower(observations['history_goal'])
+        f_dyn = self.dynamics_tower(observations['dynamics'])
+        return self.fusion(torch.cat([f_lidar, f_goal, f_hist, f_dyn], dim=1))
+
 
 class RLEnvAdapter(gym.Env):
     def __init__(self, engine: PhysicsEngine, agent_id : np.ndarray):
@@ -12,25 +59,32 @@ class RLEnvAdapter(gym.Env):
         self.engine = engine
         self.max_steps = 500
 
-        self.horizon = 3  # 新增：动作块步数
-        self.single_action_dim = 5 # 单步动作维度
-        
-        # === 动作空间修改 ===
-        # 维度调整为 5 * 3 = 15
+        self.horizon = 3  # Action Chunking 步数
+        self.single_action_dim = 5  # 单步动作维度 (e_x, e_y, e_theta, v_r, w_r)
+
+        # === 动作空间 ===
         self.action_space = spaces.Box(
             low=-1.0, high=1.0, shape=(self.single_action_dim * self.horizon,), dtype=np.float32
         )
 
         self.history_len = 3  # 记忆过去 3 步
         self.observation_space = spaces.Dict({
-            "rel_goal": spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32),
-            "lidar": spaces.Box(0, 1, (36,), dtype=np.float32), 
-            "semantic": spaces.Box(0, 1, (5,), dtype=np.float32),
-            # 【新增】动作记忆：让网络知道自己上一秒在干嘛（比如正在后退）
-            "prev_actions": spaces.Box(low=-1.0, high=1.0, shape=(self.history_len * 5,), dtype=np.float32),
-            # 【新增】目标轨迹记忆：感知自身与目标的相对运动趋势
-            "history_goal": spaces.Box(low=-np.inf, high=np.inf, shape=(self.history_len * 3,), dtype=np.float32)
+            "lidar_2d": spaces.Box(0, 1, (5, 36), dtype=np.float32),
+            "goal_dir": spaces.Box(low=-np.inf, high=np.inf, shape=(2,), dtype=np.float32),
+            "history_goal": spaces.Box(0, 1, ((self.history_len - 1) * 36,), dtype=np.float32),
+            "dynamics": spaces.Box(low=-np.inf, high=np.inf, shape=(2,), dtype=np.float32)
         })
+
+        # 加载预训练 VAE（用于 history_goal 中的动作嵌入）
+        vae_path = os.path.join(os.path.dirname(__file__), "../models/vae/action_vae_pretrained.pt")
+        self.vae = ActionVAE()
+        if os.path.exists(vae_path):
+            ckpt = torch.load(vae_path, map_location='cpu')
+            self.vae.load_state_dict(ckpt['model_state_dict'])
+            self.vae.eval()
+        else:
+            print(f"[WARN] VAE checkpoint not found at {vae_path}, using untrained VAE")
+            self.vae.eval()
 
         self.prev_potential = None
         self.prev_v = None
@@ -88,60 +142,42 @@ class RLEnvAdapter(gym.Env):
         return actions
     
     def get_agent_observation(self, agent):
+        # 目标统一为全局目标 t_pos
         agent.p_pos = agent.attk_pos if agent.attk_pos is not None else agent.t_pos
-        dx = agent.p_pos[0] - agent.position[0]
-        dy = agent.p_pos[1] - agent.position[1]
-        theta = agent.theta
-        ex =  dx * np.cos(theta) + dy * np.sin(theta)
-        ey = -dx * np.sin(theta) + dy * np.cos(theta)
-        target_angle = np.arctan2(dy, dx)
-        etheta = self._angle_diff(theta, target_angle)
-        rel_goal = np.array([ex, ey, etheta], dtype=np.float32)
-        
+
         obs_sector = self.engine.env_feedback['obs_sector_dict'].get(agent.id)
-        if obs_sector is None: obs_sector = np.ones(36, dtype=np.float32) * 100.0
-        lidar_data = 0.01 * np.array(obs_sector).astype(np.float32)
+        if obs_sector is None:
+            obs_sector = np.ones(36, dtype=np.float32) * 100.0
 
-        # ★ 新增：读取当前分配的 Skill
-        semantic_obs = getattr(agent, 'current_skill', np.array([0.9,0.9,0.9,0.9,1.0], dtype=np.float32))
+        # 2D lidar: (5, 36)
+        lidar_2d = build_lidar_2d(np.asarray(obs_sector, dtype=np.float32))
 
-        # ====== 【核心修改 3：维护目标位置的历史队列】 ======
-        if not hasattr(agent, 'history_goal_buffer'):
-            # 第一帧时，用当前的相对位置把整个队列填满
-            agent.history_goal_buffer = [rel_goal.copy() for _ in range(self.history_len)]
-        else:
-            # 后续帧，把最新的位置推入，挤出最老的位置
-            agent.history_goal_buffer.append(rel_goal.copy())
-            agent.history_goal_buffer.pop(0)
+        goal_dir, history_goal = build_goal_obs(agent, self.history_len, self.vae)
 
-        # ====== 核心修改：组装基础观测字典 ======
+        dynamics = np.array([agent.v_max / 140.0, agent.r_turn_min / 30.0], dtype=np.float32)
+
         obs_dict = {
-            "rel_goal": rel_goal,
-            "lidar": lidar_data,
-            "semantic": semantic_obs,
-            "prev_actions": np.concatenate(agent.history_action_buffer).astype(np.float32),
-            "history_goal": np.concatenate(agent.history_goal_buffer).astype(np.float32)
-        }     
-        
-        # ====== 触发高层任务分配 (MPC) ======
-        # 利用刚刚对齐的强化学习观测字典进行 Latent MPC 寻优
-        if hasattr(agent, 'behavior_system') and agent.use_latent_mpc == True:
-            # MPC 会将寻优结果直接覆写到 obs_dict['semantic']，并返回该 skill
-            best_skill = agent.behavior_system.task_allocate_model(obs_dict)
-            # 将最新的 5 维 skill ID (必须受(0,1)归一化控制) 缓存到 agent 本体
-            if best_skill is not None and not isinstance(best_skill, int):
-                agent.current_skill = best_skill
+            "lidar_2d": lidar_2d,
+            "goal_dir": goal_dir,
+            "history_goal": history_goal,
+            "dynamics": dynamics
+        }
         return obs_dict
 
     def _compute_reward(self, agent, obs, action, terminated_success, terminated_stuck):
         # === 1. 定义物理边界参数 ===
-        MAX_DIST = 200.0    
-        MAX_V = 100.0        
-        MAX_W = 5.0         
+        MAX_DIST = 200.0
+        MAX_V = 100.0
+        MAX_W = 5.0
         dT = getattr(self, 'dT', 0.1) # 仿真步长
-        
-        ex, ey, etheta = obs["rel_goal"]
-        dist = np.hypot(ex, ey)
+
+        # 从 agent 状态计算 rou/etheta（obs 中 rel_goal 已改为 36 维 mask）
+        dx = agent.p_pos[0] - agent.position[0]
+        dy = agent.p_pos[1] - agent.position[1]
+        rou = np.hypot(dx, dy)
+        target_angle = np.arctan2(dy, dx)
+        etheta = self._angle_diff(agent.theta, target_angle)
+        dist = rou
         goal_potential = dist
         
         if self.prev_potential is None:
@@ -204,16 +240,25 @@ class RLEnvAdapter(gym.Env):
         w_w = 0.5             # 惩罚剧烈转向
         w_cbf = 0.0           # 权重为 0
         w_consistency = 1.0   # 动作平滑度
-        
-        step_reward = (w_progress * norm_progress + 
-                       w_moving * norm_moving + 
-                       w_dist * norm_dist + 
-                       w_heading * norm_heading + 
+        w_deadend = 2.0       # 死胡同感知
+
+        step_reward = (w_progress * norm_progress +
+                       w_moving * norm_moving +
+                       w_dist * norm_dist +
+                       w_heading * norm_heading +
                        w_v * norm_v +
-                       w_w * norm_w + 
-                       w_cbf * norm_cbf + 
-                       w_consistency * norm_consistency - 
-                       0.1) 
+                       w_w * norm_w +
+                       w_cbf * norm_cbf +
+                       w_consistency * norm_consistency -
+                       0.1)
+
+        # === 6.5 死胡同感知 (lidar 开阔度, 连续惩罚) ===
+        obs_sector = self.engine.env_feedback['obs_sector_dict'].get(agent.id)
+        if obs_sector is not None:
+            raw_lidar = np.asarray(obs_sector, dtype=np.float32)
+            blocked_ratio = np.sum(raw_lidar < 20.0) / 36.0
+            norm_deadend = -blocked_ratio     # 0% → 0, 50% → -0.5, 100% → -1.0
+            step_reward += w_deadend * norm_deadend 
                        
         # === 7. 稀疏终止奖励 ===
         if terminated_success:
@@ -230,15 +275,14 @@ class RLEnvAdapter(gym.Env):
         self.prev_potential = None
         self.prev_action = None
         self.last_reward_terms = None
-        # ====== 【核心修改 2：回合重置时初始化队列】 ======
         for agent in self.engine.agents:
-            # 动作缓存：初始化为全 0 动作
-            agent.history_action_buffer = [np.zeros(self.single_action_dim, dtype=np.float32) for _ in range(self.history_len)]
-            # 位置缓存：如果存在则删除，让 get_agent_observation 重新用初始位置填满
-            if hasattr(agent, 'history_goal_buffer'):
-                delattr(agent, 'history_goal_buffer')
-            # ★ 新增：每次重置时，给智能体随机分配一个 5 维的伪 Skill，防止条件崩溃
-            agent.current_skill = np.random.uniform(0, 1, size=(5,)).astype(np.float32)
+            if hasattr(agent, 'goal_history'):
+                delattr(agent, 'goal_history')
+            if hasattr(agent, 'action_history'):
+                delattr(agent, 'action_history')
+            agent.v_max = np.random.uniform(100, 140)
+            agent.r_turn_min = np.random.uniform(20, 30)
+            agent.s_traveled = 0.0
             obs = self.get_agent_observation(agent)
         self.prev_obs = obs
         return obs, {}
@@ -257,11 +301,10 @@ class RLEnvAdapter(gym.Env):
                 chunk = raw_chunk[:5]
                 action_step_0 = chunk 
                 controllers[agent_id] = self._action_post_process(action_step_0)
-                # ====== 【核心修改 5a：更新动作缓存队列 (并行模式)】 ======
+                # 更新 action_history（供 obs_utils 的 VAE 嵌入使用）
                 agent = next((a for a in self.engine.agents if a.id == agent_id), None)
-                if agent and hasattr(agent, 'history_action_buffer'):
-                    agent.history_action_buffer.append(chunk.copy()) # 保存未经缩放的 raw 动作
-                    agent.history_action_buffer.pop(0)
+                if agent and hasattr(agent, 'action_history'):
+                    agent.action_history.append(chunk.copy())
 
             # 2. 物理步进
             self.engine.step_physics(controllers)
@@ -299,10 +342,9 @@ class RLEnvAdapter(gym.Env):
                 agent = self.engine.agents[0]
                 self.prev_action = np.zeros(self.single_action_dim * self.horizon) 
                 controllers = {agent.id: phys_action}
-                # ====== 【核心修改 5b：更新动作缓存队列 (单体模式)】 ======
-                if hasattr(agent, 'history_action_buffer'):
-                    agent.history_action_buffer.append(chunk.copy()) # 保存未经缩放的 raw 动作
-                    agent.history_action_buffer.pop(0)
+                # 更新 action_history（供 obs_utils 的 VAE 嵌入使用）
+                if hasattr(agent, 'action_history'):
+                    agent.action_history.append(chunk.copy())
 
             self.engine.step_physics(controllers)
             

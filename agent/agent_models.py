@@ -8,7 +8,9 @@ from agent.MapProcess import MapProcesser
 # 引入 MPC 相关组件
 from models.vqvae.VQVAE_skill_generate import SoftVQVAE
 from models.predictors.agent_dyn_predictor import ForwardPredictor
+from models.vae.action_vae import ActionVAE
 from agent.planning.latent_mpc_search import LatentMPCPlanner
+from agent.MapProcess import MapProcesser, GlobalNavField
 
 def normalize_angle(angle):
     while angle > np.pi:
@@ -23,9 +25,12 @@ def normalize_angle(angle):
 '''
 class BehaviorSystem(MapProcesser):
     # ====================================================
-    # 静态共享变量：确保所有智能体共享一个 MPC 规划器，避免显存/内存溢出
+    # 静态共享变量：确保所有智能体共享一个 MPC 规划器 / VQ-VAE，避免显存溢出
     # ====================================================
     _shared_mpc_planner = None
+    _shared_vq_model = None      # VQ-VAE decoder，用于 MPC 动作解码
+    _shared_skill_vecs = None    # skill 向量表 (16, 5)
+    _mpc_seq_len = 10            # 从 checkpoint 推断
     _models_loaded = False
     def __init__(self, agent):
         self.agent = agent
@@ -33,6 +38,8 @@ class BehaviorSystem(MapProcesser):
         # super().__init__() 
         # 从配置中读取是否启用 MPC (默认为 False)
         self.use_latent_mpc = getattr(self.agent, 'use_latent_mpc', False)
+        # === 新增：为当前智能体初始化全局拓扑导航对象 ===
+        self.global_nav = GlobalNavField()
         # 懒加载：只有在启用了 MPC 且尚未加载模型时才初始化
         if self.use_latent_mpc and not BehaviorSystem._models_loaded:
             BehaviorSystem._init_shared_mpc()
@@ -62,32 +69,76 @@ class BehaviorSystem(MapProcesser):
 
     @classmethod
     def _init_shared_mpc(cls):
-        """初始化共享的 Latent MPC 模型与网络"""
-        print(">>> [BehaviorSystem] 正在初始化全局共享的 Latent MPC 组件 (VQ-VAE + Forward Model)...")
+        """初始化共享的 Latent MPC 模型与网络 (底层 SAC 观测对齐)"""
+        print(">>> [BehaviorSystem] 正在初始化全局共享的 Latent MPC 组件...")
         device = torch.device('cpu')
         num_skills = 16
-        horizon = 10
         POS_LIMIT = 500.0
         ANG_LIMIT = np.pi
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-        # 1. 加载 VQ-VAE
-        vq_model = SoftVQVAE(seq_len=10, action_dim=5, latent_dim=4, num_skills=num_skills).to(device)
-        if os.path.exists("vqvae_skills.pth"):
-            vq_model.load_state_dict(torch.load("vqvae_skills.pth", map_location=device))
+        # 1. 加载 VQ-VAE，从 checkpoint 推断 seq_len
+        vqvae_path = os.path.join(base_dir, "models/vqvae/vqvae_skills.pth")
+        if not os.path.exists(vqvae_path):
+            print(f"  ❌ VQ-VAE 未找到: {vqvae_path}，无法启用 MPC")
+            cls._models_loaded = True  # 标为已加载防重复尝试
+            return
+
+        # 从 checkpoint 推断 seq_len (enc.0.weight: Linear(seq_len*5, 256))
+        ckpt = torch.load(vqvae_path, map_location=device)
+        enc_in_features = ckpt['enc.0.weight'].shape[1]
+        seq_len = enc_in_features // 5  # action_dim=5
+
+        cls._mpc_seq_len = seq_len
+        vq_model = SoftVQVAE(seq_len=seq_len, action_dim=5, latent_dim=4, num_skills=num_skills).to(device)
+        vq_model.load_state_dict(ckpt)
         vq_model.eval()
+        cls._shared_vq_model = vq_model
+        print(f"  ✓ VQ-VAE 已加载 (seq_len={seq_len}): {vqvae_path}")
 
+        # 构建 skill 向量 (codebook 潜变量 [0,1] + 归一化 skill ID)
         with torch.no_grad():
             codebook = vq_model.vq.embedding.weight.data
-            codebook = (codebook + 1.0) / 2.0  # 严格归一化到 (0,1) 范围
+            codebook = (codebook + 1.0) / 2.0  # [-1,1] → [0,1]
             ids = torch.arange(num_skills).float().to(device).unsqueeze(1) / num_skills
-            skill_vecs = torch.cat([codebook, ids], dim=1) 
+            skill_vecs = torch.cat([codebook, ids], dim=1)  # (16, 5)
+            cls._shared_skill_vecs = skill_vecs
 
-        # 2. 加载动力学预测模型
+        # 2. 加载 Forward Model (horizon == seq_len)
+        fwd_path = os.path.join(base_dir, "models/predictors/forward_model.pth")
+        if not os.path.exists(fwd_path):
+            print(f"  ❌ Forward Model 未找到: {fwd_path}，无法启用 MPC")
+            cls._models_loaded = True
+            return
+
+        # 从 checkpoint 推断 horizon (start_token shape → horizon)
+        fwd_ckpt = torch.load(fwd_path, map_location=device)
+        horizon = fwd_ckpt['start_token'].shape[1]
+        # causal_mask provides backup
+        if 'causal_mask' in fwd_ckpt:
+            horizon = fwd_ckpt['causal_mask'].shape[0]
+
         forward_model = ForwardPredictor(horizon=horizon).to(device)
-        if os.path.exists("forward_model.pth"):
-            forward_model.load_state_dict(torch.load("forward_model.pth", map_location=device))
+        forward_model.load_state_dict(fwd_ckpt)
         forward_model.eval()
-        
+        print(f"  ✓ Forward Model 已加载 (horizon={horizon}): {fwd_path}")
+
+        # 2.5 加载 ActionVAE → 预计算每个 skill 的首帧动作嵌入 (供分析性 history_goal 更新)
+        vae_path = os.path.join(base_dir, "models/vae/action_vae_pretrained.pt")
+        if os.path.exists(vae_path):
+            vae_ckpt = torch.load(vae_path, map_location=device)
+            action_vae = ActionVAE().to(device)
+            # 兼容两种 checkpoint 格式: 直接 state_dict 或包含 'model_state_dict' 的 dict
+            if 'model_state_dict' in vae_ckpt:
+                action_vae.load_state_dict(vae_ckpt['model_state_dict'])
+            else:
+                action_vae.load_state_dict(vae_ckpt)
+            action_vae.eval()
+            forward_model.register_skill_action_embeddings(vq_model, action_vae)
+            print(f"  ✓ ActionVAE 已加载并注册 skill→action 嵌入: {vae_path}")
+        else:
+            print(f"  ⚠ ActionVAE 未找到: {vae_path}，分析性 history_goal 将使用零嵌入")
+
         # 3. 实例化 MPC Planner
         cls._shared_mpc_planner = LatentMPCPlanner(
             forward_model=forward_model,
@@ -98,7 +149,7 @@ class BehaviorSystem(MapProcesser):
             ang_limit=ANG_LIMIT
         )
         cls._models_loaded = True
-        print(">>> [BehaviorSystem] Latent MPC 共享模块已激活！")
+        print(f">>> [BehaviorSystem] Latent MPC 已激活 (seq_len={seq_len}, horizon={horizon})")
 
     # ====================================================
     #  原 agent_models 逻辑 (self.xxx 替换为 self.agent.xxx)
@@ -138,17 +189,80 @@ class BehaviorSystem(MapProcesser):
 
     def task_allocate_model(self, obs_d=None):
         """
-        高层任务分配与规划模型
+        高层任务分配与规划模型 (MPC 选最优 skill)
+
+        obs_d: 底层 SAC 4-key Dict {lidar_2d, goal_dir, history_goal, dynamics}
+        返回: 最优 skill 向量 (5-dim)
         """
-        # 如果是 agent_core.py 物理层无参调用，或未激活 MPC，直接跳过
         if not getattr(self.agent, 'use_latent_mpc', False) or self._shared_mpc_planner is None or obs_d is None:
-            return 0 
-        # 只有在 train_sim_core.py 构建完 68 维观测后，才进行潜空间技能搜索
-        # skill还包括战斗技能，如释放烟雾、选定跟踪目标等
-        best_skill = self._shared_mpc_planner.search_best_skill(obs_d)
-        # 显式占用 5 维语义观测空间，严格执行归一化规则
-        obs_d['semantic'] = best_skill  
+            # 无 MPC 时存储零 skill
+            self.agent.mpc_skill = np.zeros(5, dtype=np.float32)
+            return self.agent.mpc_skill
+
+        # 只有当地图数据加载完毕后，才启动全局 MPC 寻优
+        if self.agent.down_sampled_map is not None and self.agent.grid_map is not None:
+            ds_h, ds_w = self.agent.down_sampled_map.shape
+            orig_h, orig_w = self.agent.grid_map.shape
+
+            nav_grid_size = self.agent.grid_size * (orig_w / ds_w)
+            panel_center = np.array([orig_w * self.agent.grid_size * 0.5,
+                                     orig_h * self.agent.grid_size * 0.5])
+
+            self.global_nav.update_map(self.agent.down_sampled_map, nav_grid_size)
+            target_pos = self.agent.t_pos if self.agent.t_pos is not None else self.agent.TARGET_POS
+            self.global_nav.update_target(target_pos, panel_center)
+
+            self._shared_mpc_planner.update_global_map(
+                self.global_nav.nav_field, panel_center, nav_grid_size
+            )
+
+            agent_global_info = {
+                'target_x': target_pos[0],
+                'target_y': target_pos[1],
+                'vehicle_heading': self.agent.theta
+            }
+
+            best_skill = self._shared_mpc_planner.search_best_skill(obs_d, agent_global_info)
+        else:
+            best_skill = self._shared_mpc_planner.search_best_skill(obs_d, None)
+
+        # 存储 MPC 选中的 skill 到 agent
+        self.agent.mpc_skill = best_skill
+        self.agent.mpc_skill_idx = int(best_skill[4] * 16)  # norm_id → index
         return best_skill
+
+    @classmethod
+    def decode_skill(cls, skill_vec):
+        """VQ-VAE decoder: skill 向量 → T 帧动作序列 (T, 5)"""
+        if cls._shared_vq_model is None:
+            return None
+        with torch.no_grad():
+            z = torch.FloatTensor(skill_vec[:4] * 2.0 - 1.0).unsqueeze(0)  # [0,1]→[-1,1]
+            recon = cls._shared_vq_model.dec(z).view(cls._mpc_seq_len, 5)   # (T, 5)
+        return recon.cpu().numpy()
+
+    def get_mpc_action(self, obs_d):
+        """
+        MPC 规划 + 解码 → 15-dim action chunk (与 SAC 输出格式一致)。
+        返回: (skill_idx, action_chunk_15)
+        """
+        best_skill = self.task_allocate_model(obs_d)
+        skill_idx = self.agent.mpc_skill_idx
+
+        # VQ-VAE decoder 解码 T 帧动作 → 取前 3 帧拼成 15-dim chunk
+        decoded = self.decode_skill(best_skill)  # (T, 5)
+        if decoded is not None and len(decoded) >= 3:
+            action_chunk = decoded[:3].flatten()  # (15,)
+        else:
+            action_chunk = np.zeros(15, dtype=np.float32)
+
+        # 简化输出：每 N 步打印一次
+        if self.agent.k % 100 == 0:
+            print(f"[MPC] Agent {self.agent.id:2d} → Skill {skill_idx:2d} | "
+                  f"action[:5]=[{action_chunk[0]:+.2f} {action_chunk[1]:+.2f} "
+                  f"{action_chunk[2]:+.2f} {action_chunk[3]:+.2f} {action_chunk[4]:+.2f}]")
+
+        return skill_idx, action_chunk.astype(np.float32)
 
     def smoke_model(self):
         can_smoke = (

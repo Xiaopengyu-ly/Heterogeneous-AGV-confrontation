@@ -1,13 +1,12 @@
 import os
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 
 from generate.generate_agents import *
 from generate.generate_config import *
 from scripts.train_SAC import *
 from scripts.VQVAE_sample import *
-from scripts.behavior_clone import *
-from models.policies.finetune_sac import *
 from models.predictors.agent_dyn_predictor import *
 from models.vqvae.VQVAE_skill_generate import *
 
@@ -16,58 +15,110 @@ def main():
         "rb_num" : [1,0],
         "obs_dense" : [20,0.5],
         "l_mpc" : True,
-        "sac_path_primitive" : "models/policies/sac_policy",
-        "sac_path_behavior_clone" : "models/policies/sac_policy_bc",
-        "sac_path_finetuned" : "models/policies/sac_policy_finetuned",
+        "sac_path" : "models/policies/sac_policy",
+        "vae_path": "models/vae/action_vae_pretrained.pt",
         "sac_train_env_nums" : 12,
         "sac_train_steps" : 300000,
         "sac_train_iters" : 1,
         "test_config_id"  : 0,
-        "sample_num" : 10,
-        "vqvae_slice_len" : 10,
-        "predict_horizen" : 10,
+        "sample_num" : 400,
+        "vqvae_slice_len" : 3,        # VQ-VAE 技能长度 = Forward Model 预测视界
         'device': 'cuda' if torch.cuda.is_available() else 'cpu'
     }
     device = torch.device(config['device'])
+    base_dir = os.path.abspath(".")
+    T = config['vqvae_slice_len']
 
-    # # 操作流程
-    # # 1、 配置智能体参数
-    # generate_agent_params(profiles=["default","water","land"])
+    # # =========================================================================
+    # # 阶段 1 — 专家轨迹 SAC 训练
+    # #   产出: models/policies/sac_policy.zip
+    # # =========================================================================
+    # generate_agent_params(profiles=["default"])
+    # train_agent(
+    #     env_nums=config.get("sac_train_env_nums", 12),
+    #     steps=config.get("sac_train_steps", 500_000),
+    #     iter=config.get("sac_train_iters", 1),
+    #     policy_path=config["sac_path"],
+    # )
+    # # =========================================================================
+    # # 阶段 1.5 — sac 部署测试
+    # # =========================================================================
+    # generate_agent_config(config.get("test_config_id", 0),
+    #                       config.get("rb_num", [1, 0]),
+    #                       config.get("obs_dense", [30, 0.5]),
+    #                       config.get("l_mpc", True))
+    # test_and_vis(config.get("sac_path", "models/policies/sac_policy"))
 
-    # # 2、 训练强化学习策略，分阶段训练
-    # # 1) 训练单体SAC -> 
-    # # 训练单体SAC时，随机生成的样本，默认"rb_num" = [1,0], "obs_dense" = [30,0.5] (因为SB3仅支持单体训练)
-    # train_agent(config.get("sac_train_env_nums",12), config.get("sac_train_steps",10000), config.get("sac_train_iters",1)) 
+    # # =========================================================================
+    # # 阶段 2 — VQ-VAE 技能发现
+    # #   产出: models/vqvae/vqvae_skills.pth
+    # # =========================================================================
+    # sampler(config.get("sample_num", 100),
+    #         config.get("sac_path", "models/policies/sac_policy"),
+    #         config.get("rb_num", [1, 0]),
+    #         config.get("obs_dense", [30, 0.5]),
+    #         config.get("l_mpc", False))
+    # data_processer_for_VQVAE(T)
+    # clean_dir("configmap")
+    # action_data = np.load("dataset/action_dataset.npy")
+    # print(f">>> 动作数据集: {action_data.shape}")
+    # train_soft_vqvae(action_data, T)
 
-    # 2) 批量仿真采样 -> 制作VQVAE技能数据集 —> 训练VQVAE技能提取模型 -> 进行VQVAE技能克隆  -> sac微调
-    sampler(config.get("sample_num",10), config.get("sac_path_primitive","models/policies/sac_policy"),
-            config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]), config.get("l_mpc", False))
-    clean_dir("configmap")
-    action_data = data_processer_for_VQVAE(config.get("vqvae_slice_len",5))
-    # print(f">>> 成功加载动作数据集，形状: {action_data.shape}")
-    # vqvae_model = train_soft_vqvae(action_data, config.get("vqvae_slice_len",5))
-    # # visualize_continuous_interpolation(vqvae_model, config.get("vqvae_slice_len",5))
-    # train_aligned_bc()
-    # inject_to_sac()
-    # sac_finetune(config.get("sac_train_env_nums",12), config.get("sac_train_steps",10000), config.get("sac_path_finetuned","models/policies/sac_policy_finetuned"))
+    # # =========================================================================
+    # # 阶段 3 — Forward Model 数据集 + 训练 + 可视化
+    # #   产出: dataset/dynamics_dataset_*.npy  +  models/predictors/forward_model.pth
+    # # =========================================================================
+    # data_processer_for_TwoTower(T, T)   # seq_len == horizon_len
+    # train_forward_model(T)
 
-    # # 3) 制作正向预测数据集 -> 训练正向预测模型 -> 
-    # data_processer_for_TwoTower(config.get("vqvae_slice_len",5), config.get("predict_horizen",5))
-    # train_forward_model(config.get("predict_horizen",5))
+    # # 训练后可视化: 随机抽取一个样本绘制热力图对比
+    # from models.predictors.agent_dyn_predictor import plot_forward_predictions
+    # from models.vqvae.VQVAE_skill_generate import SoftVQVAE
+    # from models.vae.action_vae import ActionVAE
+
+    # forward_model = ForwardPredictor(horizon=T).to(device)
+    # forward_model.load_state_dict(torch.load("models/predictors/forward_model.pth", map_location=device))
+    # forward_model.eval()
+
+    # vq_model = SoftVQVAE(seq_len=T, action_dim=5, latent_dim=4, num_skills=16).to(device)
+    # vq_model.load_state_dict(torch.load("models/vqvae/vqvae_skills.pth", map_location=device))
+    # vq_model.eval()
+
+    # # 注册 skill → ActionVAE 嵌入 (分析性 history_goal 更新所需)
+    # vae_path = "models/vae/action_vae_pretrained.pt"
+    # if os.path.exists(vae_path):
+    #     vae_ckpt = torch.load(vae_path, map_location=device)
+    #     action_vae = ActionVAE().to(device)
+    #     if 'model_state_dict' in vae_ckpt:
+    #         action_vae.load_state_dict(vae_ckpt['model_state_dict'])
+    #     else:
+    #         action_vae.load_state_dict(vae_ckpt)
+    #     action_vae.eval()
+    #     forward_model.register_skill_action_embeddings(vq_model, action_vae)
+    #     print(f"  ✓ ActionVAE 已加载并注册 skill→action 嵌入")
+    # else:
+    #     print(f"  ⚠ ActionVAE 未找到: {vae_path}")
 
     # obs_data = np.load("dataset/dynamics_dataset_obs.npy")
-    # forward_model = ForwardPredictor(horizon=config.get("predict_horizen",5)).to(device)
-    # forward_model.load_state_dict(torch.load("models/predictors/forward_model.pth", map_location=device))
-    # visualize_imagined_trajectories(forward_model, obs_data[np.random.randint(0, len(obs_data)):][:1], config.get("predict_horizen",5), config.get("vqvae_slice_len",5))
-    # clean_dir("all")
-    # 4) 训练 latent MPC 参数（基于多智能体MPC代价函数）
-    
-    # # 3、配置用于可视化测试的地图障碍密度、红蓝个体数量
-    # generate_agent_config(config.get("test_config_id",0), config.get("rb_num",[1,0]), config.get("obs_dense", [30,0.5]), config.get("l_mpc", False))
-    # # 测试时开启latent MPC
-    # test_and_vis(config.get("sac_path_finetuned","models/policies/sac_policy_spirl"))
+    # skill_data = np.load("dataset/dynamics_dataset_skills.npy")
+    # tgt_data = np.load("dataset/dynamics_dataset_trajectorys.npy")
+
+    # for idx in np.random.choice(len(obs_data), size=3, replace=False):
+    #     plot_forward_predictions(forward_model, vq_model, obs_data, skill_data, tgt_data,
+    #                               horizon=T, sample_idx=idx)
+    # plt.show()
+
+    # # =========================================================================
+    # # 阶段 4 — Latent MPC 部署测试
+    # #   需要: VQ-VAE + Forward Model
+    # # =========================================================================
+    # generate_agent_config(config.get("test_config_id", 0),
+    #                       config.get("rb_num", [1, 0]),
+    #                       config.get("obs_dense", [30, 0.5]),
+    #                       config.get("l_mpc", True))
+    # test_and_vis(config.get("sac_path", "models/policies/sac_policy"))
+
+    clean_dir("configmap")
 
 if __name__ == "__main__":
     main()
-    
-

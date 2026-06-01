@@ -196,19 +196,19 @@ def generate_agent_config(i, rb_num : list = [1,0], obs_dense : list = [30,0.5],
     # === 基础参数 ===
     width, height = 256, 256
     grid_size = int(3)
-    d_sample_hw = np.array([32,32])
+    d_sample_hw = np.array([128,128])
     side_num = {"red" : rb_num[0], "blue" : rb_num[1]}
     agent_num = sum(side_num.values())
     with open("./version.yaml", "r") as f:
         version_config = yaml.safe_load(f)
     version = version_config["version"]["id"]
-    config_save_path = f"E:/code/v3/version{version}/sim/config_data/config{i}.yaml"
-    full_size_map_path= f"E:/code/v3/version{version}/sim/map_data/grid_map{i}.npy"
-    d_sample_map_path = f"E:/code/v3/version{version}/sim/map_data/d_spl_map{i}.npy"
+    config_save_path = f"E:/code/v{int(version)}/version{version}/sim/config_data/config{i}.yaml"
+    full_size_map_path= f"E:/code/v{int(version)}/version{version}/sim/map_data/grid_map{i}.npy"
+    d_sample_map_path = f"E:/code/v{int(version)}/version{version}/sim/map_data/d_spl_map{i}.npy"
     
     # === 1. 地图 ===
     map_Fixed = False
-    isBlank = True if random.random() < 0.05 else False
+    isBlank = True if random.random() < 0.1 else False
     map_params = [width, height, full_size_map_path, d_sample_map_path, map_Fixed, isBlank, d_sample_hw,obs_dense[0],obs_dense[1]]
     obs_map, d_spl_map = generate_or_load_map(map_params)
     # === 2. Agent 基础属性 ===

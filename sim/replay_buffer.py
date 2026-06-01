@@ -103,125 +103,148 @@ class ReplayBuffer:
         return final_data
 
 
-    def extract_dynamics_dataset(self, vq_model, Horizen_len: int, filepath: str = "sim/sim_replay/0.pkl", seq_len: int = 3):
+    def extract_dynamics_dataset(self, vq_model, Horizen_len: int,
+                                   filepath: str = "sim/sim_replay/0.pkl", seq_len: int = 10):
+        """
+        提取 Forward Model 训练数据集。
+
+        输入: 单帧 obs[t] (256-dim) + skill (5-dim, 编码 actions[t:t+T])
+        目标: T 帧增量 [lidar_dist(36) + goal_dir(2)]，对应 [t+1, ..., t+T]
+        要求: seq_len == Horizen_len (动作编码长度 = 预测视界)
+        """
         import torch
         import pickle
         import numpy as np
-        
+
+        assert seq_len == Horizen_len, \
+            f"seq_len({seq_len}) must equal Horizen_len({Horizen_len})"
+
         vq_model.eval()
         device = next(vq_model.parameters()).device
-        
-        POS_LIMIT = 500.0  
-        ANG_LIMIT = np.pi  
         SKILL_NUM = 16
+        MAX_LIDAR_RANGE = 100.0
+        T = seq_len  # 统一符号
 
         def normalize_obs_dict(obs_d):
-            """全面解析强化学习的 68 维 Dict 观测空间"""
-            norm_lidar = np.array(obs_d['lidar'], dtype=np.float32)
-            norm_semantic = np.array(obs_d['semantic'], dtype=np.float32)
-            norm_prev_act = np.array(obs_d['prev_actions'], dtype=np.float32)
-            
-            norm_phy = np.zeros(3, dtype=np.float32)
-            norm_phy[0] = obs_d['rel_goal'][0] / POS_LIMIT
-            norm_phy[1] = obs_d['rel_goal'][1] / POS_LIMIT
-            norm_phy[2] = obs_d['rel_goal'][2] / ANG_LIMIT
-            
-            norm_hg = np.zeros(9, dtype=np.float32)
-            for i in range(3):
-                norm_hg[i*3] = obs_d['history_goal'][i*3] / POS_LIMIT
-                norm_hg[i*3+1] = obs_d['history_goal'][i*3+1] / POS_LIMIT
-                norm_hg[i*3+2] = obs_d['history_goal'][i*3+2] / ANG_LIMIT
-                
-            return np.concatenate([norm_lidar, norm_phy, norm_semantic, norm_prev_act, norm_hg])
+            """底层 SAC 4-key Dict → 256 维扁平"""
+            lidar_2d     = np.array(obs_d['lidar_2d'], dtype=np.float32).flatten()
+            goal_dir     = np.array(obs_d['goal_dir'], dtype=np.float32)
+            history_goal = np.array(obs_d['history_goal'], dtype=np.float32)
+            dynamics     = np.array(obs_d['dynamics'], dtype=np.float32)
+            return np.concatenate([lidar_2d, goal_dir, history_goal, dynamics])
+
+        def lidar2d_to_distances(lidar_2d):
+            n_bins, n_sectors = lidar_2d.shape
+            bin_size = MAX_LIDAR_RANGE / n_bins
+            distances = np.full(n_sectors, MAX_LIDAR_RANGE, dtype=np.float32)
+            for s in range(n_sectors):
+                for b in range(n_bins):
+                    if lidar_2d[b, s] > 0.5:
+                        distances[s] = b * bin_size
+                        break
+            return distances
+
+        def extract_forward_target(obs_dict):
+            """提取 Forward Model 预测目标: lidar_dist(36) + goal_dir(2) = 38 维"""
+            lidar_2d = np.array(obs_dict['lidar_2d'], dtype=np.float32)
+            lidar_dist = lidar2d_to_distances(lidar_2d) / MAX_LIDAR_RANGE
+            goal_dir = np.array(obs_dict['goal_dir'], dtype=np.float32)
+            return np.concatenate([lidar_dist, goal_dir])
 
         with open(filepath, 'rb') as f:
             buffer_list = pickle.load(f)
 
-        dataset_curr_obs = []   
-        dataset_skills = []   
-        dataset_actions = []
-        dataset_future_obs = []  
-        agent_caches = {} 
+        dataset_obs = []        # 单帧观测
+        dataset_skills = []     # VQ-VAE skill 编码
+        dataset_deltas = []     # T 帧增量目标
+        agent_caches = {}
 
-        print(f">>> 开始解析动力学数据: {filepath}")
+        print(f">>> 解析 Forward Model 数据: {filepath} (T={T})")
         for transition in buffer_list:
             state, obs, action_data, reward, next_state, next_obs, done = transition
             if done:
                 agent_caches.clear()
                 continue
-                
-            # 【核心修复：兼容单智能体与多智能体，处理第一帧 reset 后未包裹的观测】
+
+            # 兼容单/多智能体
             if isinstance(action_data, dict):
                 action_items = action_data.items()
-                # 检查 obs 顶层键是否是 'lidar'，如果是，说明它是未包裹的单体观测（如第一帧）
-                if 'lidar' in obs:
+                if 'lidar_2d' in obs:
                     obs_dict = {aid: obs for aid in action_data.keys()}
                 else:
                     obs_dict = obs
             else:
                 agent_id = state[0]['id']
                 action_items = [(agent_id, action_data)]
-                # 若为单体，obs没有最外层的 agent_id 键，人工包上一层
                 obs_dict = {agent_id: obs}
 
             for agent_id, action_vec in action_items:
                 if agent_id not in agent_caches:
                     agent_caches[agent_id] = {'obs': [], 'actions': []}
-                
+
                 agent_caches[agent_id]['obs'].append(obs_dict[agent_id])
-                # 只存入物理执行的 5 维动作
                 agent_caches[agent_id]['actions'].append(action_vec[:5])
 
-                if len(agent_caches[agent_id]['obs']) > Horizen_len:
-                    # --- A. 获取 Skill ID ---
-                    # 仅取前 seq_len (即 3步) 给 VQ-VAE 推理，防止维度崩溃
-                    act_seq_for_vq = np.array(agent_caches[agent_id]['actions'][:seq_len], dtype=np.float32)
-                    act_tensor = torch.from_numpy(act_seq_for_vq).unsqueeze(0).to(device)
-                    
+                # 需要 T 个动作 (编码 skill) + T+1 帧观测 (obs[0] 输入, obs[1:T+1] 计算 delta)
+                if len(agent_caches[agent_id]['actions']) >= T + 1:
+                    # --- A. VQ-VAE 编码 actions[0:T] → skill ---
+                    act_seq = np.array(agent_caches[agent_id]['actions'][:T], dtype=np.float32)
+                    act_tensor = torch.from_numpy(act_seq).unsqueeze(0).to(device)
+
                     with torch.no_grad():
                         z = vq_model.enc(act_tensor.view(1, -1))
                         _, _, indices = vq_model(act_tensor)
                         skill_id = indices.item()
-                        
-                    # 【核心修复】：将 VQ-VAE 的 [-1, 1] 潜变量线性映射到 [0, 1]
-                    skill_z_np = z.cpu().numpy().flatten()
-                    skill_z_np = (skill_z_np + 1.0) / 2.0  
-                    skill_z_np = skill_z_np.tolist()
-                    
-                    # 拼接的 ID 本身就是 [0, 1] 范围的 (skill_id / SKILL_NUM)
-                    skill_z_np.append(skill_id / SKILL_NUM)
-                    
-                    # 取出整个预测视界内的动作序列作为标签
-                    full_act_seq = np.array(agent_caches[agent_id]['actions'][:Horizen_len], dtype=np.float32)
 
-                    # --- B. 准备输入 (第 0 帧的全维度状态) ---
+                    skill_vec = np.zeros(5, dtype=np.float32)
+                    skill_vec[:4] = (z.cpu().numpy().flatten() + 1.0) / 2.0  # latent [0,1]
+                    skill_vec[4] = skill_id / SKILL_NUM                        # norm ID
+
+                    # --- B. 单帧观测输入 obs[0] ---
                     state_input = normalize_obs_dict(agent_caches[agent_id]['obs'][0])
 
-                    # --- C. 准备目标标签 (未来残差序列) ---
-                    future_sequence = []
-                    for i in range(1, Horizen_len + 1):
-                        f_state = normalize_obs_dict(agent_caches[agent_id]['obs'][i])
-                        future_sequence.append(f_state - state_input)
+                    # --- C. T 帧增量目标 [obs[t+1]-obs[t], ..., obs[t+T]-obs[t+T-1]] ---
+                    deltas = []
+                    prev = extract_forward_target(agent_caches[agent_id]['obs'][0])
+                    for i in range(1, T + 1):
+                        curr = extract_forward_target(agent_caches[agent_id]['obs'][i])
+                        deltas.append(curr - prev)
+                        prev = curr
 
-                    dataset_curr_obs.append(state_input)
-                    dataset_skills.append(skill_z_np)
-                    dataset_actions.append(full_act_seq)
-                    dataset_future_obs.append(np.array(future_sequence))
+                    dataset_obs.append(state_input)
+                    dataset_skills.append(skill_vec)
+                    dataset_deltas.append(np.array(deltas, dtype=np.float32))
 
-                    # --- E. 滑动窗口 ---
+                    # --- D. 滑动 ---
                     agent_caches[agent_id]['obs'].pop(0)
                     agent_caches[agent_id]['actions'].pop(0)
 
-        if len(dataset_curr_obs) == 0:
+        if len(dataset_obs) == 0:
             return None
 
-        final_obs = np.array(dataset_curr_obs, dtype=np.float32)
-        final_skills = np.array(dataset_skills, dtype=np.float32)
-        final_actions = np.array(dataset_actions, dtype=np.float32)
-        final_future_obs = np.array(dataset_future_obs, dtype=np.float32)
+        final_obs = np.array(dataset_obs, dtype=np.float32)       # (N, 256)
+        final_skills = np.array(dataset_skills, dtype=np.float32)  # (N, 5)
+        final_deltas = np.array(dataset_deltas, dtype=np.float32)  # (N, T, 38)
 
-        print(f">>> 提取完成: 物理量纲已缩放, 组合状态维度: {final_obs.shape[1]}")
-        return final_obs, final_skills, final_actions, final_future_obs
+        print(f">>> 提取完成: Obs {final_obs.shape}, Skill {final_skills.shape}, "
+              f"Deltas {final_deltas.shape}")
+        return final_obs, final_skills, final_deltas
+
+
+def lidar2d_to_distances(lidar_2d, max_range=100.0):
+    """从 lidar_2d (n_bins, 36) 重建 36 维原始距离 (米)
+
+    可用于 Forward Model 和 Latent MPC 的 CBF 碰撞检测。
+    """
+    n_bins, n_sectors = lidar_2d.shape
+    bin_size = max_range / n_bins
+    distances = np.full(n_sectors, max_range, dtype=np.float32)
+    for s in range(n_sectors):
+        for b in range(n_bins):
+            if lidar_2d[b, s] > 0.5:
+                distances[s] = b * bin_size
+                break
+    return distances
 
 
 import numpy as np

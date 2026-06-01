@@ -21,7 +21,7 @@ def sampler(sample_num : int = 10, policy_path : str = "models/policies/sac_poli
             "data_id": iter,
             "buffer_capacity": max_steps,
             "lower_actor": model,
-            "use_latent_mpc" : False  # 关键设置，用于技能提取不需要开启latent mpc
+            "use_latent_mpc" : use_latent_mpc  # 关键设置，用于技能提取不需要开启latent mpc
         }
         sim_controller = SimulationController(env, config)
         while True:
@@ -30,7 +30,7 @@ def sampler(sample_num : int = 10, policy_path : str = "models/policies/sac_poli
                 print(f"采样第 {iter} 轮结束")
                 break
 
-def data_processer_for_VQVAE(slice_len : int = 5):
+def data_processer_for_VQVAE(slice_len : int = 10):
     files_pattern = "*.pkl"
     source_dir = "sim/sim_replay"
     action_dataset_path = "dataset/action_dataset.npy"
@@ -57,17 +57,28 @@ def data_processer_for_VQVAE(slice_len : int = 5):
         else:
             print(">>> 错误：未提取到任何有效样本，未保存文件。")
 
-def data_processer_for_TwoTower(skill_len : int = 5, horizon_len : int = 10):
+def data_processer_for_TwoTower(skill_len : int = 10, horizon_len : int = 10):
+    """
+    生成 Forward Model 训练数据集。
+    要求: skill_len == horizon_len (动作编码长度 = 预测视界)
+
+    产出:
+      dataset/dynamics_dataset_obs.npy         — (N, 256)  单帧观测
+      dataset/dynamics_dataset_skills.npy      — (N, 5)    VQ-VAE skill 编码
+      dataset/dynamics_dataset_trajectorys.npy — (N, T, 38) T 帧增量
+    """
     from models.vqvae.VQVAE_skill_generate import SoftVQVAE
+    assert skill_len == horizon_len, \
+        f"skill_len({skill_len}) must equal horizon_len({horizon_len})"
+
     files_pattern = "*.pkl"
     source_dir = "sim/sim_replay"
     dataset_path = "dataset/dynamics_dataset"
     os.makedirs(os.path.dirname(dataset_path), exist_ok=True)
-    
-    #  关键配置：将技能长度对齐到底层 Action Chunking 的 Horizon 长度
+
+    T = skill_len
     CONFIG = {
-        'T': skill_len,             # 技能长度 (Horizon = 3)
-        'H': horizon_len,            # 预测视界 (未来 10 步的轨迹)
+        'T': T,
         'latent_dim': 4,
         'num_skills': 16,
         'model_path_ae': 'models/vqvae/vqvae_skills.pth',
@@ -76,16 +87,12 @@ def data_processer_for_TwoTower(skill_len : int = 5, horizon_len : int = 10):
     device = torch.device(CONFIG['device'])
     print(f"Using device: {device}")
 
-    curr_obs_dataset, skills_dataset = [], []
-    action_dataset, future_trajectory_dataset = [], []
-
+    obs_dataset, skills_dataset, deltas_dataset = [], [], []
     buffer = ReplayBuffer(capacity=2000)
 
     vq_model = SoftVQVAE(
-        seq_len=CONFIG['T'], 
-        action_dim = 5,      # 拆分后的单步动作维度
-        latent_dim=CONFIG['latent_dim'], 
-        num_skills=CONFIG['num_skills']
+        seq_len=T, action_dim=5,
+        latent_dim=CONFIG['latent_dim'], num_skills=CONFIG['num_skills']
     ).to(device)
 
     if os.path.exists(CONFIG['model_path_ae']):
@@ -94,33 +101,31 @@ def data_processer_for_TwoTower(skill_len : int = 5, horizon_len : int = 10):
     else:
         print(">>> 暂无可用 VQ-VAE 模型")
         return False
-    
+
     if os.path.exists(source_dir):
         files = glob.glob(os.path.join(source_dir, files_pattern))
-        print(f">>> 找到 {len(files)} 个数据文件")
-        
+        print(f">>> 找到 {len(files)} 个数据文件 (T={T})")
+
         for f in files:
-            dump = buffer.extract_dynamics_dataset(vq_model, CONFIG['H'], f, CONFIG['T'])
-            if dump is not None and len(dump) > 0 :
-                curr_obs, skills, actions, future_trajectory = dump
-                curr_obs_dataset.append(curr_obs)
+            dump = buffer.extract_dynamics_dataset(vq_model, T, f, T)
+            if dump is not None and len(dump) > 0:
+                curr_obs, skills, deltas = dump
+                obs_dataset.append(curr_obs)
                 skills_dataset.append(skills)
-                action_dataset.append(actions)
-                future_trajectory_dataset.append(future_trajectory)
+                deltas_dataset.append(deltas)
 
         if len(skills_dataset) > 0:
-            curr_obs_dataset = np.concatenate(curr_obs_dataset, axis=0)
+            obs_dataset = np.concatenate(obs_dataset, axis=0)
             skills_dataset = np.concatenate(skills_dataset, axis=0)
-            action_dataset = np.concatenate(action_dataset, axis=0)
-            future_trajectory_dataset = np.concatenate(future_trajectory_dataset, axis=0)
-            
-            print(f">>> 最终数据集形状: Obs {curr_obs_dataset.shape}, Skill {skills_dataset.shape}, Actions {action_dataset.shape}, Trajectory {future_trajectory_dataset.shape}")
-            np.save(f"{dataset_path}_obs.npy", curr_obs_dataset)
+            deltas_dataset = np.concatenate(deltas_dataset, axis=0)
+
+            print(f">>> 最终数据集: Obs {obs_dataset.shape}, "
+                  f"Skill {skills_dataset.shape}, Deltas {deltas_dataset.shape}")
+            np.save(f"{dataset_path}_obs.npy", obs_dataset)
             np.save(f"{dataset_path}_skills.npy", skills_dataset)
-            np.save(f"{dataset_path}_actions.npy", action_dataset)
-            np.save(f"{dataset_path}_trajectorys.npy", future_trajectory_dataset)
-            print(f">>> 数据集已保存至: {dataset_path} ")
-            return curr_obs_dataset
+            np.save(f"{dataset_path}_trajectorys.npy", deltas_dataset)
+            print(f">>> 数据集已保存至: {dataset_path}_*")
+            return obs_dataset
         else:
             print(">>> 错误：未提取到任何有效样本。")
 

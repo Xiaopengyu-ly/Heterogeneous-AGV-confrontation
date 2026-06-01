@@ -6,7 +6,9 @@ from PyQt5.QtWidgets import QApplication
 
 from vis.controlled_window import ControlledVisWindow
 from sim.sim_initialize import sim_initialize
+from sim.train_sim_core import UnifiedFeatureExtractor
 from generate.generate_config import generate_agent_config
+from generate.generate_agents import generate_agent_params
 import sys
 import time
 import os
@@ -15,6 +17,7 @@ import shutil
 
 def make_env(i):
     def _init():
+        generate_agent_params(profiles=["default"])
         generate_agent_config(i)
         sim = sim_initialize(i)
         return sim
@@ -37,12 +40,13 @@ def train_agent(env_nums : int = 9, steps : int = 100000, iter : int = 1, policy
         print(f"🧠 启动多进程训练（{num_envs} 个环境）...")
         env = SubprocVecEnv([make_env(i) for i in range(num_envs)])
         env = VecMonitor(env, filename=f"./logs/monitor{iter}.csv")
-        case = 0 if iter == 0 else 1
-        if os.path.exists(policy_path) and case == 1:
-            model = SAC.load(policy_path, env=env)
-            print(f"🔄 加载模型 '{policy_path}'，继续训练")
-        else:
-            case = 0
+        # case = 1 if iter == 0 else 1
+        case = 0
+        # if os.path.exists(policy_path) and case == 1:
+        #     model = SAC.load(policy_path, env=env)
+        #     print(f"🔄 加载模型 '{policy_path}'，继续训练")
+        # else:
+        #     case = 0
         try:
             if case == 0:
                 print("🆕 从头开始训练（case=0）")
@@ -53,15 +57,21 @@ def train_agent(env_nums : int = 9, steps : int = 100000, iter : int = 1, policy
                     verbose = 1,
                     learning_rate = 3e-4,
                     gamma = 0.99,
-                    ent_coef = "auto_0.2",           # 自动调节熵，适合探索
-                    train_freq = 1,              # 每步都训练（默认）
-                    gradient_steps = 1,          # 每次训练更新1次（可设为 -1 表示等于 num_envs）
-                    buffer_size = 10000,       # 导航任务buffer可以较小
-                    learning_starts = 1000,      # 至少收集 1000 步再开始训练
+                    ent_coef = "auto_0.2",
+                    train_freq = 1,
+                    gradient_steps = 1,
+                    buffer_size = 10000,
+                    learning_starts = 1000,
+                    policy_kwargs = dict(
+                        features_extractor_class = UnifiedFeatureExtractor,
+                        features_extractor_kwargs = dict(features_dim=128),
+                        net_arch = dict(pi=[256, 256], qf=[256, 256]),
+                    ),
                 )
                 reset_timesteps = True
             else:
-                
+                model = SAC.load(policy_path, env=env)
+                print(f"🔄 加载模型 '{policy_path}'，继续训练")
                 model.replay_buffer.pos = 0
                 reset_timesteps = False
             model.learn(
@@ -110,26 +120,27 @@ def clean_dir(clean_mode : str = "configmap"):
                         except OSError as e:
                             print(f"Error deleting {f}: {e}")
 
-def test_and_vis(policy_path : str, config_id : int = 0):
-    print("🧪 加载模型并测试 ...")
+# scripts/train_SAC.py
+
+def test_and_vis(policy_path: str, config_id: int = 0):
+    print("🧪 加载统一 SAC 策略并启动可视化 ...")
     env = sim_initialize(config_id)
-    model = SAC.load(policy_path)
+
+    lower_model = SAC.load(policy_path)
+
     app = QApplication(sys.argv)
     max_steps = 2000
-    data_id = 0
+
     config = {
-        "case": "sim_onceonly", # "replay_sim" / "sim_onceonly"
+        "case": "sim_onceonly",
         "max_steps": max_steps,
-        "data_id": data_id,
+        "data_id": 0,
         "buffer_capacity": max_steps,
-        "lower_actor" : model,
-        "use_latent_mpc" : True
+        "lower_actor": lower_model,
     }
-    # 创建窗口（此时 QApplication 已存在）
+
     window = ControlledVisWindow(env, config)
     window.show()
-    # 启动事件循环
     sys.exit(app.exec_())
-
 
 

@@ -19,18 +19,22 @@ def normalize_angle(angle):
 
 # 【重大修改】Agent 不再继承任何功能类
 class Agent:
-    def __init__(self, id: int, position: np.ndarray, velocity: np.ndarray, dT: float = 0.02, side = 0, use_latent_mpc = False):
-        # ... (配置加载部分保持不变) ...
-        # === 从配置文件加载参数 ===
-        config = load_agent_config(config_name = "default")
+    def __init__(self, id: int, position: np.ndarray, velocity: np.ndarray, dT: float = 0.02, side = 0, p_vector = None, use_latent_mpc: bool = False):
+        # === 加载装备参数：优先使用传入的 P 向量，否则回退到默认配置 ===
+        if p_vector is not None:
+            config = self._p_vector_to_config(p_vector)
+        else:
+            config = load_agent_config(config_name = "default")
 
         # 任务参数
         self.TARGET_POS = np.array([0.0, 0.0])
+        self.use_latent_mpc = use_latent_mpc
 
         # 装备性能指标
         self.v_max = config["v_max"] 
         self.r_turn_min = config["r_turn_min"]
         self.s_max = config["s_max"]
+        self.s_traveled = 0.0
         self.sense_field = config["sense_field"]
         self.sense_angle = config["sense_angle"]
         self.sense_variance = config["sense_variance"]
@@ -120,19 +124,38 @@ class Agent:
         self.launch_delay_count = self.launch_delay
         self.rpoint_valid = False
         self.hit_rpoint = False
-        self.rtPlanFlag = False
-
         # 任务阶段标志位
-        self.use_latent_mpc = use_latent_mpc
         self.disabled = False
         self.cannon_launched = False
-        self.smoke_mission = True
+        self.smoke_mission = False
+        self.hrl_active = False
         
         # === 【核心修改】实例化四大组件 ===
         self.comm_system = CommSystem(self)
         self.check_system = CheckSystem(self)
         self.data_system = DataSystem(self)
         self.behavior_system = BehaviorSystem(self)
+
+    @staticmethod
+    def _p_vector_to_config(p_vector):
+        """将 20 维 P 向量转换为配置字典，顺序与 sample_p_vector 保持一致"""
+        keys = [
+            "v_max", "r_turn_min", "s_max", "sense_field",
+            "sense_angle_deg", "sense_variance", "attack_range",
+            "cannon_w_max_deg", "launch_delay", "num_per_launch",
+            "attk_radius", "attk_variance", "cannon_capacity",
+            "smoke_capacity", "reflective_surface", "exposed_area",
+            "decision_delay", "task_preference", "task_assignment",
+            "weapon_assignment",
+        ]
+        config = dict(zip(keys, p_vector))
+        config["connect_dist"] = 101  # 通信距离保持默认
+        # 自动转换角度单位 (与 load_agent_config 行为一致)
+        if "sense_angle_deg" in config:
+            config["sense_angle"] = np.deg2rad(config.pop("sense_angle_deg"))
+        if "cannon_w_max_deg" in config:
+            config["cannon_w_max"] = np.deg2rad(config.pop("cannon_w_max_deg"))
+        return config
 
     # ==========================================
     #               接口代理区 (Facade)
@@ -155,7 +178,7 @@ class Agent:
         return self.data_system.get_trajectory()
     def get_grid_map(self, map_layers=None, grid_size=1):
         self.data_system.get_grid_map(map_layers, grid_size)
-    def get_route_point(self, case="A_star", action=np.array([0,0,0,0,0])):
+    def get_route_point(self, case="RL_Actor", action=np.array([0,0,0,0,0])):
         return self.data_system.get_route_point(case, action)
 
     # --- Comm System ---
@@ -178,7 +201,8 @@ class Agent:
         self.theta = normalize_angle(self.theta)
         self.velo = np.array([self.v * math.cos(self.theta), self.v * math.sin(self.theta)])
         self.position = self.position + self.velo * self.dT
-        
+        self.s_traveled += abs(self.v) * self.dT
+
         self.check_hit() # check 逻辑
 
     def update_sense_model(self):
@@ -186,9 +210,6 @@ class Agent:
     
     def update_smoke_model(self):
         self.behavior_system.smoke_model()
-
-    def update_task_allocate_model(self):
-        self.behavior_system.task_allocate_model()
 
     def update_attack_model(self):
         self.behavior_system.attack_model()
@@ -214,7 +235,6 @@ class Agent:
             return
         self.update_smoke_model()
         self.update_sense_model()
-        self.update_task_allocate_model()
         self.update_attack_model()
         self.update_movement_model()
 
