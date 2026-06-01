@@ -102,14 +102,14 @@ class LatentMPCPlanner:
         cur_rou = cur_goal_dir[0] * self.POS_LIMIT
         cur_etheta = cur_goal_dir[1] * self.ANG_LIMIT
 
-        # ---- 平滑代价 ----
+        # ---- 1. 纯粹的软成本 (Soft Costs): 导航进度与动作平滑度 ----
         time_weights = torch.linspace(0.5, 1.5, steps=horizon, device=self.device)
         cost_heading = (torch.abs(etheta) * time_weights).mean(dim=1) * 0.5
         base_cost = cost_heading.clone()
         boundary_penalty = torch.zeros(self.num_skills, device=self.device)
 
-        # ---- 拓扑代价 ----
         if agent_global_info is not None and self.nav_field_tensor is not None:
+            # 拓扑代价计算保持不变
             target_x = agent_global_info['target_x']
             target_y = agent_global_info['target_y']
             alpha = agent_global_info['vehicle_heading'] - cur_etheta
@@ -126,6 +126,8 @@ class LatentMPCPlanner:
             over_left = torch.clamp(-raw_gx, min=0.0)
             over_bottom = torch.clamp(raw_gy - (self.map_height - 1), min=0.0)
             over_top = torch.clamp(-raw_gy, min=0.0)
+            
+            # 地图越界视为极大的拓扑惩罚
             boundary_penalty = (over_right + over_left + over_bottom + over_top).sum(dim=1) * 500.0
 
             grid_x = torch.clamp(raw_gx.long(), 0, self.map_width - 1)
@@ -135,31 +137,33 @@ class LatentMPCPlanner:
             map_cost = torch.where(torch.isinf(map_cost),
                                    torch.tensor(100.0, device=self.device), map_cost)
             cost_progress = (map_cost * time_weights).mean(dim=1) * 5.0
+            
+            # base_cost 严格仅包含软成本
             base_cost += cost_progress + boundary_penalty
         else:
             cost_progress = (rou * time_weights).mean(dim=1) * 5.0
             base_cost += cost_progress
 
-        # ---- CBF 防撞 ----
-        soft_margin = 0.15
-        hard_margin = 0.05
+        # ---- 2. 绝对的硬约束 (Hard Constraints): CBF 物理安全边界 ----
+        # 移除软边距(soft_margin)的标量叠加惩罚，直接建立刚性掩码
+        safe_margin = 0.15 
         clamped_lidar = torch.clamp(lidar_abs, 0.0, 1.0)
 
-        soft_violation = torch.clamp(soft_margin - clamped_lidar, min=0.0).sum(dim=(1, 2))
-        base_cost += soft_violation * 20.0
-
-        hard_violation = torch.clamp(hard_margin - clamped_lidar, min=0.0).sum(dim=(1, 2))
+        # 统计违反安全距离的程度 (作为掩码判断标准，不计入目标函数代价)
+        hard_violation = torch.clamp(safe_margin - clamped_lidar, min=0.0).sum(dim=(1, 2))
+        
+        # 核心逻辑：任何违反 safe_margin 的技能在这一步直接被判定为不可行
         is_feasible = hard_violation == 0
 
         cost_details = {
             'nav_costs': cost_progress,
             'smooth_costs': cost_heading,
-            'col_costs': soft_violation,
             'boundary_penalty': boundary_penalty,
             'cur_rou': cur_rou,
         }
 
         return base_cost, is_feasible, hard_violation, cost_details
+
 
     def search_best_skill(self, obs_d, agent_global_info=None):
         LatentMPCPlanner._global_step += 1
@@ -168,21 +172,25 @@ class LatentMPCPlanner:
         obs_flat_t, norm_lidar_t, goal_dir = self._align_observation(obs_d)
         self._last_norm_lidar = norm_lidar_t
 
-        # 2. 并行推演 16 skills
+        # 2. 并行推演 16 skills 
+        # (后续 JEPA 模型在此处直接输出 latent_abs 进行时序演化计算)
         lidar_abs, goal_abs = self._parallel_rollout(obs_flat_t, self.skill_vecs)
 
-        # 3. 代价与约束
-        base_cost, is_feasible, violation_amount, cost_details = \
+        # 3. 代价与约束解耦计算
+        base_cost, is_feasible, hard_violation, cost_details = \
             self._compute_cost_and_constraints(lidar_abs, goal_abs, agent_global_info, goal_dir)
 
-        # 4. 寻优
+        # 4. 应用硬掩码进行寻优
         n_feasible = is_feasible.sum().item()
         if n_feasible > 0:
+            # 场景 A: 存在物理绝对安全的轨迹，在其中挑选任务推进代价最小的
             valid_costs = torch.where(is_feasible, base_cost,
                                       torch.tensor(float('inf'), device=self.device))
             best_idx = torch.argmin(valid_costs).item()
         else:
-            best_idx = torch.argmin(violation_amount).item()
+            # 场景 B (极端兜底): 预选的 VQ-VAE 技能全部存在碰撞风险
+            # 此时目标函数失效，无视任务进度，强制选择碰撞干涉量最小的技能进行紧急避险
+            best_idx = torch.argmin(hard_violation).item()
 
         # 5. 缓存状态
         self._cached_skill = self.skill_vecs[best_idx].cpu().numpy()

@@ -112,13 +112,13 @@ def main():
     # # 阶段 4 — Latent MPC 部署测试
     # #   需要: VQ-VAE + Forward Model
     # # =========================================================================
-    # generate_agent_config(config.get("test_config_id", 0),
-    #                       config.get("rb_num", [1, 0]),
-    #                       config.get("obs_dense", [30, 0.5]),
-    #                       config.get("l_mpc", True))
-    # test_and_vis(config.get("sac_path", "models/policies/sac_policy"))
+    generate_agent_config(config.get("test_config_id", 0),
+                          config.get("rb_num", [1, 0]),
+                          config.get("obs_dense", [30, 0.5]),
+                          config.get("l_mpc", True))
+    test_and_vis(config.get("sac_path", "models/policies/sac_policy"))
 
-    clean_dir("configmap")
+    # clean_dir("all")
 
 if __name__ == "__main__":
     main()
